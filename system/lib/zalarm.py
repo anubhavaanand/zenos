@@ -56,6 +56,34 @@ def _recipients():
         return []
 
 
+def _msg_port():
+    """the desk account's messenger port (ports.env), but only while the program listening there runs as the desk
+    user: the alert and the messenger's key never go to another account that took the port"""
+    import sys
+    port = 8096
+    try:
+        fd = os.open(os.path.join(Z, "msg", "ports.env"), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            for line in os.read(fd, 4096).decode("utf-8", "replace").splitlines():
+                a, _, p = line.strip().partition("=")
+                if a == "zenos" and p.isdigit() and 1024 <= int(p) <= 65535:
+                    port = int(p)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+    here = os.path.dirname(os.path.abspath(__file__))
+    for d in ("/usr/share/zenos/bin", os.path.join(here, "..", "..", "core", "bin")):
+        if os.path.isfile(os.path.join(d, "zenos_portcheck.py")) and d not in sys.path:
+            sys.path.append(d)
+    try:
+        import zenos_portcheck
+        u = zenos_portcheck.listeners(port)
+    except Exception:
+        return None
+    return port if u and all(x == _desk_uid() for x in u) else None
+
+
 def _msg_key():
     """The messenger's local key (it answers only callers that show it). The file sits in the desk user's folder, so it
     is opened without following a link and used only if that user owns it: a planted link to a root file gives nothing."""
@@ -97,9 +125,12 @@ def dispatch(title, text, reasons):
         except Exception:
             pass
     key = _msg_key()
+    port = _msg_port()
     try:
         import urllib.request as _u
-        req = _u.Request("http://127.0.0.1:8096/api/channel-send",
+        if not port:
+            raise OSError("the desk messenger is not the one listening")
+        req = _u.Request(f"http://127.0.0.1:{port}/api/channel-send",
                          data=__import__("json").dumps({"ch": "alerts", "text": "RED ALERT: " + text, "level": 4}).encode(),
                          headers={"Content-Type": "application/json", "X-Zenos-Local": key})
         _u.urlopen(req, timeout=4)              # post into #alerts -> fans out to seniors' PWAs
@@ -107,7 +138,9 @@ def dispatch(title, text, reasons):
         pass
     try:                                        # Web Push to the owner's linked phone(s), even when the app is closed
         import urllib.request as _u
-        req = _u.Request("http://127.0.0.1:8096/api/push/alert",
+        if not port:
+            raise OSError("the desk messenger is not the one listening")
+        req = _u.Request(f"http://127.0.0.1:{port}/api/push/alert",
                          data=__import__("json").dumps({"title": "ZENOS RED ALERT: " + str(title)[:60], "body": str(text)[:300]}).encode(),
                          headers={"Content-Type": "application/json", "X-Zenos-Local": key})
         r = __import__("json").loads(_u.urlopen(req, timeout=8).read() or b"{}")

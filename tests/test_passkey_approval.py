@@ -150,5 +150,24 @@ class PasskeyApproval(unittest.TestCase):
         near = json.dumps(dict(json.loads(far), attachment="cross-platform"))   # the unsigned field changed
         self.assertEqual(self.check(near)[:2], (False, "replayed"))
 
+    def test_a_marker_or_number_another_parser_reads_differently_counts_for_nothing(self):
+        far = json.loads(self.phone.approve(self.digest, near=False, count=0, synced=True))
+        for bad in (dict(far, passkey=True, attachment="cross-platform"),):
+            self.assertEqual(self.check(json.dumps(bad))[:2], (False, "signature"))
+        nan = json.dumps(dict(far, attachment="cross-platform")).replace('"attachment"', '"x": NaN, "attachment"')
+        self.assertEqual(self.check(nan)[:2], (False, "signature"))
+
+
+    def test_made_up_signatures_do_not_push_a_real_one_out_of_the_list(self):
+        import zapprove
+        far = self.phone.approve(self.digest, near=False, count=0, synced=True)
+        self.assertEqual(self.check(far)[:2], (False, "phone-not-near"))
+        j = json.loads(far)
+        for i in range(zapprove.SEEN_MAX + 5):                   # anyone can send these to the guard
+            junk = dict(j, signature=base64.urlsafe_b64encode(b"junk%d" % i).decode().rstrip("="))
+            self.assertEqual(self.check(json.dumps(junk))[0], False)
+        self.assertEqual(self.check(json.dumps(dict(j, attachment="cross-platform")))[:2], (False, "replayed"))
+
+
 if __name__ == "__main__":
     unittest.main()

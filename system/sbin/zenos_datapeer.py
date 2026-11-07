@@ -44,11 +44,14 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey   
 RID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 MAX_RECORD = 8 * 1024 * 1024
+DEFAULT_QUOTA_BYTES = 20 << 30          # per server, unless conf.json gives "quota_bytes" for it
+DEFAULT_QUOTA_RECORDS = 5_000_000
 
 
 class Peer:
     def __init__(self, state, role, audit=None, now=time.time, conf_path=None):
         self.dir, self.role, self.now = Path(state), role, now
+        self._use = {}
         self.conf_path = Path(conf_path) if conf_path else self.dir / "conf.json"
         self.dir.mkdir(parents=True, exist_ok=True)
         os.chmod(self.dir, 0o700)
@@ -233,12 +236,30 @@ class Peer:
             return 403, {"ok": False, "error": "not an enrolled server, or not signed now"}
         # each server's records in its own folder: an id another server will use cannot be taken first
         p = self.dir / "records" / server / f"{rid}.json"
+        body = json.dumps({"server": server, "record": rec})
+        # and each server within its own share of this peer: one taken-over server does not fill it for the others
+        used, count = self._usage(server)
+        old = p.stat().st_size if p.exists() else 0
+        quota = int((s or {}).get("quota_bytes", DEFAULT_QUOTA_BYTES))
+        qcount = int((s or {}).get("quota_records", DEFAULT_QUOTA_RECORDS))
+        if used - old + len(body.encode()) > quota or (not old and count + 1 > qcount):
+            self.log("put-refused", server, id=rid, reason="quota")
+            return 507, {"ok": False, "error": "this server's share of the storage peer is full"}
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"server": server, "record": rec}))
+        tmp.write_text(body)
         os.replace(tmp, p)
+        self._use[server] = (used - old + p.stat().st_size, count + (0 if old else 1))
         self.log("put", server, id=rid, table=str(rec.get("table")), level=rec.get("level"))
         return 200, {"ok": True}
+
+    def _usage(self, server):
+        """bytes and records this server keeps here (counted once, then kept up to date)"""
+        if server not in self._use:
+            d = self.dir / "records" / server
+            files = list(d.glob("*.json")) if d.is_dir() else []
+            self._use[server] = (sum(f.stat().st_size for f in files), len(files))
+        return self._use[server]
 
     def get(self, b):
         if self.role != "store":

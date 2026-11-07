@@ -484,7 +484,14 @@ class AuditOverHTTPS(unittest.TestCase):
         (m / "pc-a.status.json").write_text(json.dumps({"status": {"services": {"zenos-keyd": "active"}, "halted": False},
                                                         "down": []}))
         good = zenos_keysvc.NodeAudit(f"http://127.0.0.1:{port}", node.pub_b64())
-        last, ok, halted = zenos_keysvc.Service(tmp / "s1", good).health("pc-a")
+        s1 = zenos_keysvc.Service(tmp / "s1", good)
+        stranger = zenos_keysvc.NodeAudit(f"http://127.0.0.1:{port}", node.pub_b64())    # no reader key
+        self.assertEqual(zenos_keysvc.Service(tmp / "s3", stranger).health("pc-a"), (0, False, False))
+        good.signer = s1.key
+        self.assertEqual(s1.health("pc-a"), (0, False, False))      # signed, but not an enrolled reader yet
+        node.enroll_reader("keysvc", s1.pub_b64())
+        good.cache.clear()
+        last, ok, halted = s1.health("pc-a")
         self.assertTrue(time.time() - last < 60 and ok and not halted)
         self.assertEqual(zenos_keysvc.Service(tmp / "s1", good).health("pc-b"), (0, False, False))
         forged = zenos_keysvc.NodeAudit(f"http://127.0.0.1:{port}", base64.b64encode(raw_pub(Ed25519PrivateKey.generate())).decode())
@@ -493,6 +500,8 @@ class AuditOverHTTPS(unittest.TestCase):
         chain.write_text(json.dumps({"event": "unseal", "fid": "f" * 32, "actor": "u"}) + "\n"
                          + json.dumps({"event": "seal", "fid": "e" * 32, "actor": "u"}) + "\n")
         self.assertEqual(good.unseals("pc-a"), {("f" * 32, "u")})
+        with self.assertRaises(Exception):
+            stranger.unseals("pc-a")                               # who opened what: not for anyone who asks
         with self.assertRaises(Exception):
             forged.unseals("pc-a")
 

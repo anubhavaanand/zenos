@@ -9,7 +9,7 @@ Checked in the source, for every program ZENOS ships:
   - LiveKit's generated settings bind to 127.0.0.1.
 And by running them: the audit node, the key service, the data peers and the approval page each refuse to start on
 0.0.0.0 without a certificate."""
-import json, os, re, socket, subprocess, sys, unittest
+import json, os, re, socket, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -123,6 +123,23 @@ class NoExposedAdmin(unittest.TestCase):
             so.listen(1)
             self.assertEqual(PC.listeners(port), [os.getuid()])
             self.assertTrue(PC.ok(port, 0))
+
+    def test_red_alert_goes_only_to_the_desk_users_messenger(self):
+        sys.path.insert(0, str(REPO / "system" / "lib"))
+        import zalarm
+        from unittest import mock
+        d = Path(tempfile.mkdtemp())
+        (d / "msg").mkdir()
+        with socket.socket() as so:
+            so.bind(("127.0.0.1", 0))
+            so.listen(1)
+            port = so.getsockname()[1]
+            (d / "msg" / "ports.env").write_text(f"zenos={port}\n")
+            with mock.patch.object(zalarm, "Z", str(d)):
+                with mock.patch.object(zalarm, "_desk_uid", lambda: os.getuid()):
+                    self.assertEqual(zalarm._msg_port(), port)
+                with mock.patch.object(zalarm, "_desk_uid", lambda: os.getuid() + 1):
+                    self.assertIsNone(zalarm._msg_port())     # another account holds the port: nothing is sent
 
     def test_office_ai_relay_serves_only_its_own_page(self):
         """the office apps' AI relay: no other site's page, no request that skips the browser's preflight, and no

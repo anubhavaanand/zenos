@@ -492,6 +492,14 @@ http.createServer(async (req, res) => {
       if (typeof c.id !== "string" || !c.id || c.id.length > 64) return send(res, 400, { error: "bad channel id" });
       const want = Math.max(1, Math.min(5, Math.floor(Number(c.level)) || 1));
       if (c.by && want > ((bundles[c.by] || {}).level || 1)) return send(res, 403, { error: `Your clearance is L${(bundles[c.by] || {}).level || 1}; a channel cannot be above it.` });
+      // raising the level must hold for everyone already in it: the invite checks (clearance, organization) would
+      // otherwise be passed at L1 and kept at L4
+      if (prev.id && c.by && want > (prev.level || 1)) {
+        const org = (bundles[c.by] || {}).org || "";
+        const short = (prev.members || []).filter((m) => ((bundles[m] || {}).level || 1) < want || (want >= 2 && ((bundles[m] || {}).org || "") !== org));
+        if (short.length) { audit("msg-level-raise-refused", { channel: c.id, by: c.by, level: want, members: short.length });
+          return send(res, 403, { error: `Blocked: ${short.length} member(s) are not cleared for L${want} or are outside your organisation. Remove them first.` }); }
+      }
       // a member creates a channel with only themselves in it; everyone else comes in through invite (clearance,
       // organization and the second approver are checked there). Only the administrator seeds a member list.
       channels[c.id] = { id: c.id, name: String(c.name || c.id).slice(0, 80), members: (!c.by && Array.isArray(c.members)) ? c.members.map(String) : (prev.members || [c.by]), level: (prev.id && c.by) ? Math.max(prev.level || 1, want) : (prev.id ? (Number(c.level) ? want : prev.level || 1) : want), kind: (!c.by && c.kind) ? String(c.kind).slice(0, 20) : (prev.kind || "channel"),

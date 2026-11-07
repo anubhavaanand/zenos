@@ -89,6 +89,11 @@ On the service machine (behind TLS):
     zenos_keysvc.py --store /var/lib/zenos-keys --clearance USER N
     zenos_keysvc.py --store /var/lib/zenos-keys --approver NAME PUBKEY
 
+When the key service reaches the audit node over the network (`--audit-url`, `--audit-pub`), the node answers its
+questions about PCs (health, which files were opened by whom) only to an enrolled reader. On the audit node:
+
+    zenos_auditnode.py --store /var/lib/zenos-audit --enroll-reader keysvc <the key service's --show-key output>
+
 On the PC, `/etc/zenos/keysvc.json`:
 
     {"url": "https://keys.example.go.jp:8444", "pub": "<the --show-key output>"}

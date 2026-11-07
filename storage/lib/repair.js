@@ -27,12 +27,21 @@ function isLeader (fileId, self, peers) {
   return r.length > 0 && r[0].publicKey === self.publicKey
 }
 
+// A node that claims shards it cannot hand over (caught by the spot checks below) is not believed for an hour, for
+// any file: one dishonest node must not make every file look whole while honest copies are lost.
+const distrusted = new Map() // publicKey -> until (ms)
+const SPOT_CHECKS = 2 // indices per file per pass whose every claimed holder must hand over the matching shard
+const distrust = p => distrusted.set(p.publicKey, Date.now() + 3600e3)
+const isDistrusted = p => (distrusted.get(p.publicKey) || 0) > Date.now()
+
 async function survey (fileId, peers) {
   const holders = new Map() // index -> [peer]
   const perPeer = new Map() // publicKey -> Set(index), null when the peer did not answer
   await Promise.all(peers.map(async p => {
     try {
       const { header } = await p.request({ op: 'list_shards', fileId })
+      const idx = isDistrusted(p) ? [] : (Array.isArray(header.indices) ? header.indices.filter(Number.isInteger) : [])
+      header.indices = idx
       perPeer.set(p.publicKey, new Set(header.indices))
       for (const i of header.indices) {
         if (!holders.has(i)) holders.set(i, [])
@@ -51,6 +60,26 @@ async function repairFile (manifestBuf, peers, { log: rawLog = () => {}, self = 
   const log = s => rawLog(`${tag} ${s.trim()}`)
   const report = { fileId: m.fileId, missing: [], rebuilt: [], copied: [], skipped: null }
   const { holders, perPeer } = await survey(m.fileId, peers)
+  // spot checks: a claim counts only while the node backs it with the shard itself
+  const sample = [...holders.keys()].sort(() => Math.random() - 0.5).slice(0, SPOT_CHECKS)
+  for (const i of sample) {
+    for (const h of [...(holders.get(i) || [])]) {
+      let good = false
+      try {
+        const { body } = await h.request({ op: 'get_shard', fileId: m.fileId, index: i })
+        good = sha256hex(body) === m.shardHashes[i]
+      } catch {}
+      if (!good) {
+        log(`${h.label} claims shard #${i} but cannot hand it over: its claims are not believed for an hour`)
+        distrust(h)
+        for (const j of perPeer.get(h.publicKey) || []) {
+          const rest = (holders.get(j) || []).filter(x => x.publicKey !== h.publicKey)
+          if (rest.length) holders.set(j, rest); else holders.delete(j)
+        }
+        perPeer.set(h.publicKey, new Set())
+      }
+    }
+  }
   const alive = peers.filter(p => perPeer.get(p.publicKey) !== null)
   if (self) {
     const holding = alive.filter(p => perPeer.get(p.publicKey).size > 0)
@@ -68,7 +97,7 @@ async function repairFile (manifestBuf, peers, { log: rawLog = () => {}, self = 
     const set = zoneIndices(p.zone)
     return set.has(i) || set.size < cap
   }
-  const placeable = alive.filter(p => eligible(p, m.level))
+  const placeable = alive.filter(p => eligible(p, m.level) && !isDistrusted(p))   // no shard to a node caught lying
   const pickTarget = i => {
     const cands = rank(m.fileId, placeable).filter(p => zoneOk(p, i) && !(perPeer.get(p.publicKey) || new Set()).has(i))
     cands.sort((a, b) => load(a) - load(b))
@@ -151,4 +180,4 @@ async function repairFile (manifestBuf, peers, { log: rawLog = () => {}, self = 
   return report
 }
 
-module.exports = { repairFile, isLeader, rank }
+module.exports = { distrusted, repairFile, isLeader, rank }

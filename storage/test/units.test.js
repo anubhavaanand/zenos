@@ -168,3 +168,28 @@ test('manifests count against the node size limit, and one bad file does not sto
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('a node that claims shards it does not hold cannot stop repair', async () => {
+  const crypto = require('crypto')
+  const { repairFile } = require('../lib/repair')
+  const node = (label, zone) => {
+    const held = new Map()
+    return { label, zone, role: 'node', clearance: 'L5', publicKey: crypto.randomBytes(32).toString('hex'), held,
+      request: async (h, b) => {
+        if (h.op === 'list_shards') return { header: { indices: [...held.keys()] } }
+        if (h.op === 'get_shard') { if (!held.has(h.index)) throw new Error('no'); return { header: {}, body: held.get(h.index) } }
+        if (h.op === 'put_shard') { held.set(h.index, b); return { header: {} } }
+        if (h.op === 'put_manifest') return { header: {} }
+        throw new Error('op')
+      } }
+  }
+  const liar = { label: 'liar', zone: 'zL', role: 'node', clearance: 'L5', publicKey: crypto.randomBytes(32).toString('hex'),
+    request: async h => { if (h.op === 'list_shards') return { header: { indices: [0, 1, 2, 3, 4] } }; throw new Error('not held') } }
+  const { manifestBuf, shards } = seal(Buffer.from('payload'), { k: 3, n: 5, level: 'L2', name: 'x' })
+  const nodes = ['a', 'b', 'c', 'd', 'e'].map((l, i) => node(l, 'z' + i))
+  shards.forEach((s, i) => nodes[i].held.set(i, s))
+  nodes[3].held.clear(); nodes[4].held.clear()            // two honest nodes lose their shards
+  const r = await repairFile(manifestBuf, [...nodes, liar], {})
+  assert.deepEqual(r.missing.sort(), [3, 4])
+  assert.deepEqual(r.rebuilt.map(x => x.index).sort(), [3, 4])
+})

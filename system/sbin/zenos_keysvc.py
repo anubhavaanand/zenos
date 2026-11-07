@@ -69,10 +69,11 @@ class StoreAudit:
 
 class NodeAudit:
     """an audit node reached over HTTPS; its answers must be signed with its key (as in the PCs' audit.json)"""
-    def __init__(self, url, pub_b64, fetch=None):
+    def __init__(self, url, pub_b64, fetch=None, signer=None, reader="keysvc"):
         self.url, self.pub = url.rstrip("/"), Ed25519PublicKey.from_public_bytes(zkeysvc.unb64(pub_b64))
         self.fetch = fetch or self._get
         self.cache = {}
+        self.signer, self.reader = signer, reader          # the node answers these reads only to an enrolled reader
 
     def _get(self, path):
         import urllib.request
@@ -80,7 +81,13 @@ class NodeAudit:
         u = urlparse(self.url)
         if u.scheme != "https" and u.hostname not in ("127.0.0.1", "localhost", "::1"):
             raise ValueError("the audit node must be reached over https")
-        with urllib.request.urlopen(self.url + path, timeout=10,
+        req = urllib.request.Request(self.url + path)
+        if self.signer is not None:
+            t = int(time.time())
+            req.add_header("X-Zenos-Reader", self.reader)
+            req.add_header("X-Zenos-Time", str(t))
+            req.add_header("X-Zenos-Sig", base64.b64encode(self.signer.sign(f"GET {path} {t}".encode())).decode())
+        with urllib.request.urlopen(req, timeout=10,
                                     context=ssl.create_default_context() if u.scheme == "https" else None) as r:
             return json.loads(r.read())
 
@@ -707,6 +714,8 @@ def main():
                   rate_max=int(opt("--rate-max", 30)), rate_window=int(opt("--rate-window", 60)),
                   presence_from=int(opt("--presence-from", 6)), machine_rate_max=int(opt("--machine-rate-max", 60)),
                   origin=opt("--origin"))
+    if isinstance(audit, NodeAudit):
+        audit.signer, audit.reader = svc.key, opt("--audit-reader", "keysvc")
     if "--show-key" in a:
         return print(svc.pub_b64())
     if opt("--notify-url"):

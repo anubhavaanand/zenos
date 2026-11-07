@@ -53,6 +53,24 @@ class GuardPaths(unittest.TestCase):
             self.assertEqual(halts[-1][0], "bulk-transfer")
         self.assertTrue(G.in_security(G.DESK / "Red · L4" / "deep" / "a.zen") if "Red · L4" in G.Z.FOLDERS else True)
 
+    def test_sealed_files_renamed_off_zen_still_count_for_bulk_reads(self):
+        halts = []
+        from unittest import mock
+        G.HALT, G.SYSD = self.d / "halt.json", self.d / "sys4"
+        G.PLAN_USE, G.DATA = G.SYSD / "pu.json", self.d / "data4"
+        folder = G.DESK / "Red · L4"
+        folder.mkdir()
+        sealed = G.Z.MAGIC + b'{"level": 4}\n' + b"sig\nct"
+        G.reads.clear()
+        with mock.patch.object(G, "halt", lambda rule, paths, level, culprit=None: halts.append((rule, level))), \
+                mock.patch.object(G, "plan_allows", lambda *a: False):
+            for i in range(G.BULK_READ_N):
+                f = folder / f"report{i}.dat"
+                f.write_bytes(sealed)
+                G.on_open(str(f), 4242)
+        self.assertEqual(halts, [("bulk-read", 4)])
+        G.reads.clear()
+
     def test_quarantine_moves_files_not_links(self):
         secret = self.d / "root-only.txt"
         secret.write_text("root's file")

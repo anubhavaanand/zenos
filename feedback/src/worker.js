@@ -156,6 +156,15 @@ async function triage(env) {
 }
 // a post that is held leaves its proposal: the proposal's title and question are rebuilt from its visible posts
 // (or it is closed when none is left), and the notes on the other posts are written again
+// AI-written text that points somewhere: a domain (also written "x [.] com", "x (.) com", "x . com", "x dot com"), an
+// address, a URL, a handle, or a messaging service by name. Such text waits for a maintainer.
+function steeredText(t) {
+  const s = String(t || "").normalize("NFKC")
+    .replace(/\s*[\[(（{<【]\s*([.。．｡]|dot|ドット)\s*[\])）}>】]\s*/giu, ".")
+    .replace(/\s+([.。．｡])\s+/gu, "$1");
+  return /[\p{L}\p{N}-][.。．｡][\p{L}]{2,}|\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f]{0,4}:[0-9a-f]{0,4}:[0-9a-f:]+|h[tx]{2}ps?|[a-z][a-z0-9+.-]*:\/\/|@[\p{L}\p{N}_-]{2,}|\b(?:dot|ドット)\b|telegram|whatsapp|discord|wechat|line\s*id|signal\s+(?:user|id|number)|skype|kakao|viber/iu.test(s);
+}
+
 async function unpropose(env, postId) {
   const post = await one(env.DB, "SELECT proposal FROM posts WHERE id = ?", postId);
   if (!post || !post.proposal) return;
@@ -224,14 +233,14 @@ async function api(req, env, ctx) {
     if (p === "/api/review/result" && req.method === "POST") {
       const b = await req.json().catch(() => ({}));
       const post = await one(env.DB, "SELECT * FROM posts WHERE id = ? AND reviewed = 0", +b.id); if (!post) return json(404, { error: "no such post, or already reviewed" });
-      if (b.appropriate === false) { await run(env.DB, "UPDATE posts SET reviewed = ?, hidden = 1, held = ? WHERE id = ?", Date.now(), clip(b.reason || "Held for a maintainer.", 200), post.id); await unpropose(env, post.id); }
+      // the hold reason is shown to everyone, and the AI wrote it after reading the post: it gets the same check
+      if (b.appropriate === false) { await run(env.DB, "UPDATE posts SET reviewed = ?, hidden = 1, held = ? WHERE id = ?", Date.now(), steeredText(b.reason) ? "Held for a maintainer." : clip(b.reason || "Held for a maintainer.", 200), post.id); await unpropose(env, post.id); }
       else await run(env.DB, "UPDATE posts SET reviewed = ? WHERE id = ?", Date.now(), post.id);
       if (b.appropriate !== false && typeof b.answer === "string" && b.answer.trim()) {
         await run(env.DB, "INSERT OR IGNORE INTO users (id, handle, name, via, joined, young, banned) VALUES ('ai', '@zenos-ai', 'ZENOS AI', 'ai', ?, 0, 0)", Date.now());
         // the AI read a stranger's post to write this, so a post can steer it: an answer that carries a link or an
         // address waits for a maintainer instead of going out under the AI's name
-        const ans = String(b.answer).normalize("NFKC");
-        const steered = /[\p{L}\p{N}-][.。．｡][\p{L}]{2,}|\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f]{0,4}:[0-9a-f]{0,4}:[0-9a-f:]+|h[tx]{2}ps?|[a-z][a-z0-9+.-]*:\/\/|@[\p{L}\p{N}_-]{2,}|\b(?:dot|ドット)\b/iu.test(ans);
+        const steered = steeredText(b.answer);
         await run(env.DB, "INSERT INTO posts (thread, edition, text, at, user, staff, reply, byai, hidden, held) VALUES (?, '', ?, ?, 'ai', 0, ?, 1, ?, ?)", post.thread, clip(b.answer, 1500), Date.now(), post.reply || post.id,
           steered ? 1 : 0, steered ? "An AI answer with a link waits for a maintainer." : "");
       }
@@ -323,6 +332,12 @@ async function api(req, env, ctx) {
     return json(200, { ok: true });
   }
   if (p === "/api/metoo") {
+    // a banned account changes nothing, and nobody toggles without limit (each toggle is a database write)
+    if (me.banned) return json(403, { error: "This account cannot do that." });
+    const n = (await one(env.DB, "SELECT COUNT(*) n FROM metoo_log WHERE user = ? AND at > ?", me.id, Date.now() - 3600e3)).n;
+    if (n >= 60) return json(429, { error: "Too many changes; try again later." });
+    await run(env.DB, "INSERT INTO metoo_log (user, at) VALUES (?, ?)", me.id, Date.now());
+    await run(env.DB, "DELETE FROM metoo_log WHERE at < ?", Date.now() - 3600e3);
     const x = await one(env.DB, "SELECT id FROM posts WHERE id = ? AND reply IS NULL", +b.post); if (!x) return json(404, { error: "no such post" });
     const had = await one(env.DB, "DELETE FROM metoo WHERE post = ? AND user = ? RETURNING post", x.id, me.id);
     if (!had) await run(env.DB, "INSERT INTO metoo (post, user) VALUES (?, ?)", x.id, me.id);

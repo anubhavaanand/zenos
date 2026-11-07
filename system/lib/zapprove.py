@@ -71,6 +71,10 @@ def roster(pub_dir):
 SEEN_MAX = 4096
 
 
+def _no_constant(c):
+    raise ValueError("not plain JSON: " + c)
+
+
 def _save(cf, counts):
     try:
         cf.parent.mkdir(parents=True, exist_ok=True)
@@ -109,8 +113,10 @@ def check(pub_dir, name, sig, message, level=0, state=None, pol=None):
             return False, "signature", {"key": "ed25519"}
     try:
         phone = json.loads((Path(pub_dir) / f"{name}.passkey.json").read_text())
-        a = json.loads(sig) if isinstance(sig, str) else sig
-        if not isinstance(a, dict) or a.get("passkey") != 1:
+        # plain JSON only (no NaN or Infinity, which another parser on the way would read differently), and the
+        # marker exactly the number 1 (True == 1 in Python, not in the messenger's JavaScript)
+        a = json.loads(sig, parse_constant=_no_constant) if isinstance(sig, str) else sig
+        if not isinstance(a, dict) or type(a.get("passkey")) is not int or a["passkey"] != 1:
             raise ValueError("not a passkey signature")
         if a.get("credential_id") != phone.get("cred_id"):
             raise ValueError("another passkey")
@@ -125,15 +131,19 @@ def check(pub_dir, name, sig, message, level=0, state=None, pol=None):
     # every passkey signature is taken once, whatever the outcome: many phones keep the signature counter at 0, and
     # "attachment" is not signed, so the same signature sent again with another claim must not count
     counts = counts if isinstance(counts, dict) else {}
-    seen = counts.get("_seen") if isinstance(counts.get("_seen"), list) else []
-    sh = hashlib.sha256(s).hexdigest()
-    if cf:
-        if sh in seen:
-            return False, "replayed", {"key": "passkey", "credential": phone.get("cred_id")}
-        counts["_seen"] = (seen + [sh])[-SEEN_MAX:]
-        _save(cf, counts)
+    # Only a signature that verifies is remembered, in that passkey's own list: anyone can reach the guard with
+    # made-up signatures, and they must neither fill the list nor push a real one out of it
     phone = dict(phone, count=max(int(phone.get("count") or 0), int(counts.get(phone["cred_id"], 0))))
     f = zwebauthn.check_assertion(phone, ad, cdj, s, message)
+    if cf and f.get("sig_ok"):
+        sk = "_seen:" + str(phone["cred_id"])
+        seen = counts.get(sk) if isinstance(counts.get(sk), list) else []
+        sh = hashlib.sha256(s).hexdigest()
+        if sh in seen:
+            return False, "replayed", {"key": "passkey", "credential": phone.get("cred_id")}
+        counts[sk] = (seen + [sh])[-SEEN_MAX:]
+        counts.pop("_seen", None)
+        _save(cf, counts)
     near = a.get("attachment") == "cross-platform"
     exc = a.get("exception") == "remote"
     facts = {"key": "passkey", "credential": phone["cred_id"], **{k2: v for k2, v in f.items() if k2 != "count"}, "near": near,

@@ -14,6 +14,11 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
 DPKG = os.environ.get("ZENOS_REAL_DPKG", "/usr/bin/dpkg")
 STAGE = os.environ.get("ZENOS_DPKG_STAGE", "/var/lib/zenos/dpkg-stage")
+INSTALL_LONG = {"--install", "--unpack", "--record-avail"}
+# dpkg options that may take their value as the next argument (that value is not a package file)
+VALUE_OPTS = {"--admindir", "--root", "--instdir", "--log", "--status-fd", "--status-logger", "--path-include",
+              "--path-exclude", "--abort-after", "--pre-invoke", "--post-invoke", "--ignore-depends", "--debug",
+              "--verify-format"}
 
 
 def main(argv):
@@ -30,14 +35,26 @@ def main(argv):
                                            all(ch.isalpha() for ch in a[1:])) for a in argv):
         print("ZENOS: installing every package in a folder (-R) is not allowed; give the package files.", file=sys.stderr)
         return 2
-    # a file argument is anything not an option, and everything after "--" (where "-x.deb" is a file too)
-    pos, after = [], False
+    # a file argument is anything not an option (nor the value of an option that takes one), and everything after
+    # "--" (where "-x.deb" is a file too)
+    pos, after, skip = [], False, False
     for i, a in enumerate(argv):
-        if after or not a.startswith("-"):
+        if skip:
+            skip = False
+        elif after or not a.startswith("-"):
             pos.append(i)
         elif a == "--":
             after = True
-    odd = [argv[i] for i in pos if os.path.lexists(argv[i]) and not (os.path.isfile(argv[i]) or os.path.isdir(argv[i]))]
+        elif a in VALUE_OPTS:
+            skip = True
+    installing = any(a in INSTALL_LONG or (a.startswith("-") and not a.startswith("--") and a[1:].isalpha()
+                                           and set(a[1:]) & set("iA")) for a in argv if a != "--")
+    if installing:
+        # an install takes package files only: a name that is missing or a folder now could be a file by the time
+        # dpkg opens it, never checked
+        odd = [argv[i] for i in pos if not os.path.isfile(argv[i])]
+    else:
+        odd = [argv[i] for i in pos if os.path.lexists(argv[i]) and not (os.path.isfile(argv[i]) or os.path.isdir(argv[i]))]
     if odd:
         # a pipe or a device can give dpkg other bytes than the ones checked
         print("ZENOS: not installing from %s: not a regular file." % ", ".join(odd), file=sys.stderr)

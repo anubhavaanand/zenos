@@ -97,6 +97,16 @@ class Guard(unittest.TestCase):
         self.assertFalse(ans["ok"])                                 # the right code after five wrong ones: too late
         self.assertIn("Too many", ans["message"])
 
+    def test_an_approval_already_given_cannot_lock_the_request(self):
+        G, r = self.G, self._req()
+        sato = self._sig("sato", r)
+        self.assertTrue(G.handle({"op": "approve", "request": r["id"], "approver": "sato", "code": r["code"], "sig": sato})["ok"])
+        wrong = "0000" if r["code"] != "0000" else "1111"
+        for _ in range(10):                                    # read from the request file, sent again with wrong codes
+            G.handle({"op": "approve", "request": r["id"], "approver": "sato", "code": wrong, "sig": sato})
+        self.assertTrue(G.handle({"op": "approve", "request": r["id"], "approver": "tanaka", "code": r["code"],
+                                  "sig": self._sig("tanaka", r)})["ok"])
+
     def test_release_needs_valid_signatures_and_code(self):
         G, r = self.G, self._req()
         self.assertEqual(r["required"], 3)
@@ -346,6 +356,32 @@ class AuditShipping(unittest.TestCase):
         self.assertEqual(self.node.accept(b)[0], 400)
         with self.assertRaises(ValueError):
             self.node.enroll("pc__test", base64.b64encode(raw_pub(self.key)).decode())
+        for bad in ("pc_", "_pc"):                            # "pc_"+"__"+"x" is the same file as "pc"+"__"+"_x"
+            with self.assertRaises(ValueError):
+                self.node.enroll(bad, base64.b64encode(raw_pub(self.key)).decode())
+
+    def test_a_persons_ledger_neither_raises_alerts_nor_fills_the_node(self):
+        def batch(chain, recs, frm=0):
+            b = {"machine": "pc-test", "chain": chain, "from": frm, "records": recs}
+            self.S.sign(self.key, b)
+            return b
+        L = self.L
+        f = Path(tempfile.mkdtemp()) / "u.jsonl"
+        L.append(str(f), "integrity-alert", "alice", "pc", reason="FORGED: /usr/sbin/sshd changed")
+        recs = [json.loads(x) for x in f.read_text().splitlines()]
+        alerts = self.node.dir / "alerts.jsonl"
+        before = alerts.read_text().count("FORGED") if alerts.exists() else 0
+        self.assertEqual(self.node.accept(batch("user-alice", recs))[0], 200)
+        after = alerts.read_text().count("FORGED") if alerts.exists() else 0
+        self.assertEqual(after, before)                        # a person's own ledger raises no PC alert
+        old = self.N.MAX_USER_CHAIN_BYTES
+        self.N.MAX_USER_CHAIN_BYTES = 10
+        try:
+            L.append(str(f), "open", "alice", "pc", file="x.zen")
+            recs = [json.loads(x) for x in f.read_text().splitlines()]
+            self.assertEqual(self.node.accept(batch("user-alice", recs[1:], 1))[0], 507)
+        finally:
+            self.N.MAX_USER_CHAIN_BYTES = old
 
     def test_forged_batch_is_refused(self):
         b = {"machine": "pc-test", "chain": "other", "from": 0, "records": [], "sig": base64.b64encode(b"x" * 64).decode()}

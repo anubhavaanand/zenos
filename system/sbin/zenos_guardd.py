@@ -265,7 +265,8 @@ def exempt(pid, comm):
     except OSError:
         return False
     if any(e.split(b"=", 1)[0] in (b"LD_PRELOAD", b"LD_LIBRARY_PATH", b"LD_AUDIT", b"PYTHONPATH", b"PYTHONHOME",
-                                   b"PYTHONSTARTUP", b"PYTHONINSPECT", b"PYTHONUSERBASE") for e in env):
+                                   b"PYTHONSTARTUP", b"PYTHONINSPECT", b"PYTHONUSERBASE", b"NODE_PATH",
+                                   b"NODE_REPL_EXTERNAL_MODULE", b"NODE_EXTRA_CA_CERTS") for e in env):
         return False
     if any(e.startswith(b"NODE_OPTIONS=") and e not in (b"NODE_OPTIONS=", b"NODE_OPTIONS=--require=/usr/lib/zenos/zdistrust.js")
            for e in env):
@@ -568,9 +569,37 @@ def enforce_loop():
 
 
 # ---------------- events ----------------
+_sealed_seen = {}
+
+
+def is_sealed(p):
+    """a sealed file by its content, whatever its name; remembered per (size, mtime) so the guard's own look at a
+    file (which the folder watch reports as one more open) is not read again and again"""
+    try:
+        st = os.stat(p, follow_symlinks=False)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    key = (str(p), st.st_size, st.st_mtime_ns)
+    if key not in _sealed_seen:
+        if len(_sealed_seen) > 10000:
+            _sealed_seen.clear()
+        try:
+            fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                _sealed_seen[key] = os.read(fd, len(Z.MAGIC)) == Z.MAGIC
+            finally:
+                os.close(fd)
+        except OSError:
+            _sealed_seen[key] = False
+    return _sealed_seen[key]
+
+
 def on_open(p, pid):
     now = time.time()
-    if pid == ME or halted() or Path(p).suffix != ".zen" or not in_security(p):
+    # a sealed file counts whatever it is called: renamed off ".zen" it is still sealed
+    if pid == ME or halted() or not in_security(p) or not (Path(p).suffix == ".zen" or is_sealed(p)):
         return
     if now - recent_write.get(p, 0) < 5:                   # the guard sealing a file just saved
         return
@@ -820,8 +849,12 @@ def handle(msg):
                                             "decline it and let a new request be sent."}
         code_ok = str(msg.get("code", "")).strip() == r["code"]
         if op == "approve" and sig_ok and not code_ok:           # only an officer's signed try counts
-            r["code_tries"] = int(r.get("code_tries", 0) or 0) + 1      # a 4-digit code cannot be tried through
-            write_json(rp, r)
+            # but not an approval already given: it is in the request file, which other accounts can read, and
+            # sending it again with wrong codes must not lock the request for the next officer
+            if not any(str(a.get("sig", "")) == str(msg.get("sig", "")) for a in r.get("approvals", [])
+                       if isinstance(a, dict)):
+                r["code_tries"] = int(r.get("code_tries", 0) or 0) + 1      # a 4-digit code cannot be tried through
+                write_json(rp, r)
         result = zdecide.approve(with_sig_ok(r), roster(), who, op, sig_ok, code_ok)
         if result.startswith("refused:"):
             reason = result.split(":", 1)[1]

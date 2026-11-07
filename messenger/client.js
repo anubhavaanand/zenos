@@ -539,8 +539,12 @@ const official = (req) => !!(req.dev && devices[req.dev] && devices[req.dev].off
 const restrict = (arr, remote, req) => {
   const cl = PEOPLE[ACC].level;
   const a = arr.filter((m) => (m.level || 1) <= cl);
-  return (remote && !official(req)) ? a.map((m) => (m.level > 2 && ["msg", "event", "call", "callkey", "share", "callsig", "zrel"].includes(m.kind || "msg"))
-    ? { ...m, text: "", att: null, ev: m.kind === "zrel" && m.ev && m.ev.core ? { lockedId: m.ev.core.id } : null, locked: true } : m) : a;
+  // above L2 such a phone gets only who, when and what kind, whatever the kind (a list of kinds to blank would miss
+  // the next kind added): the content fields are dropped, not blanked one by one
+  const KEEP = ["id", "t", "dir", "peer", "from", "ch", "level", "kind", "target", "status", "read", "delivered"];
+  return (remote && !official(req)) ? a.map((m) => (m.level > 2)
+    ? { ...Object.fromEntries(KEEP.filter((k) => k in m).map((k) => [k, m[k]])), text: "", att: null,
+        ev: m.kind === "zrel" && m.ev && m.ev.core ? { lockedId: m.ev.core.id } : null, locked: true } : m) : a;
 };
 // ---------- attachments (Signal model): AES-256-GCM with a fresh key per file; ciphertext to the relay, key only inside the E2E message
 const ATT = path.join(DIR, "att"); fs.mkdirSync(ATT, { recursive: true, mode: 0o700 });
@@ -661,7 +665,11 @@ async function carryAnswer(from, m) {
   // signature, checked against the administrator-enrolled key
   const a = { ...m.ev }, op = a.op === "decline" ? "decline" : "approve";
   // an answer from afar is never "near" this PC, whatever it says (the passkey does not sign that field)
-  try { const j = JSON.parse(String(a.sig || "")); if (j && j.passkey === 1) a.sig = JSON.stringify({ ...j, attachment: "relayed" }); } catch {}
+  // a passkey answer this side cannot read as plain JSON with passkey 1 is not passed on at all
+  if (String(a.sig || "").trim().startsWith("{")) {
+    let j = null; try { j = JSON.parse(String(a.sig)); } catch {}
+    a.sig = j && typeof j === "object" && j.passkey === 1 ? JSON.stringify({ ...j, attachment: "relayed" }) : "";
+  }
   const p = reqFile(a.id);
   const out = !p ? { ok: false, message: "Unknown request." }
     : p.startsWith(GSYS) ? await guardd({ op, request: String(a.id || ""), approver: from, sig: String(a.sig || ""), code: String(a.code || "") })
@@ -993,6 +1001,7 @@ async function handle(req, res, remote) {
         }
         const t = hist.find((m) => m.id === b.target && m.kind === "event");
         if (!t) return json(res, 404, { error: "No such event." });
+        if (remote && !official(req) && (t.level || 1) > 2) return json(res, 200, { error: "This phone is not registered as government-issued. Above L2, use an official device." });
         const extra = u.pathname === "/api/rsvp"
           ? { kind: "rsvp", target: t.id, status: ["yes", "maybe", "no"].includes(b.status) ? b.status : "yes" }
           : { kind: "evupd", target: t.id, ev: clean(b.ev), cancel: !!b.cancel };

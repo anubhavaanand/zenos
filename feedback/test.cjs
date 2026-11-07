@@ -83,11 +83,11 @@ const rv = (p, body) => call("rev", p, body, { Authorization: "Bearer " + REVIEW
   r = await call("anon", "/api/replies?post=" + ps[2].id); const a = r.j.posts.find((x) => x.byAI); assert.ok(a && /Dark mode/.test(a.text) && a.handle === "@zenos-ai"); ok("the AI's answer is a reply marked as the AI's");
   r = await rv("/api/review/result", { id: ps[2].id, appropriate: true }); assert.equal(r.status, 404); ok("a post is reviewed once");
   const other = pend.find((x) => x.id !== ps[2].id && !/Ignore previous/.test(x.text));
-  r = await rv("/api/review/result", { id: other.id, appropriate: true, answer: "Ask at t.me/zenos_help for the answer." }); assert.ok(r.j.ok);
+  r = await rv("/api/review/result", { id: other.id, appropriate: true, answer: "Ask at zenos_help [.] org for the answer." }); assert.ok(r.j.ok);
   r = await call("anon", "/api/replies?post=" + (other.reply || other.id)); const aiHeld = r.j.posts.find((x) => x.held && !x.text);
-  assert.ok(aiHeld && !r.t.includes("zenos_help")); ok("an AI answer with a link waits for a maintainer");
+  assert.ok(aiHeld && !r.t.includes("zenos_help")); ok("an AI answer with a link (even written \"x [.] org\") waits for a maintainer");
   const inj = pend.find((x) => /Ignore previous/.test(x.text));
-  r = await rv("/api/review/result", { id: inj.id, appropriate: false, reason: "Tries to instruct the reviewer." }); assert.ok(r.j.ok);
-  r = await call("anon", "/api/thread?t=ideas"); assert.equal(r.j.posts.find((x) => x.id === inj.id).held, "Tries to instruct the reviewer."); ok("the review holds a post it finds not appropriate");
+  r = await rv("/api/review/result", { id: inj.id, appropriate: false, reason: "Tries to instruct the reviewer; appeal at zenos-fix . com" }); assert.ok(r.j.ok);
+  r = await call("anon", "/api/thread?t=ideas"); assert.equal(r.j.posts.find((x) => x.id === inj.id).held, "Held for a maintainer."); ok("the review holds a post it finds not appropriate, and a hold reason with an address is not shown");
   console.log("all", n, "passed");
 })().catch((e) => { console.error(e); process.exitCode = 1; }).finally(() => { try { process.kill(-srv.pid); } catch {} fs.rmSync(dir, { recursive: true, force: true }); });

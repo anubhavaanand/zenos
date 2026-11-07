@@ -17,6 +17,7 @@ TEXT = {
     "machine-back": "{machine} is reporting again.",
     "service-down": "{machine}: {service} is {state}.",
     "history-rewritten": "{machine}: its {chain} ledger was rewritten at record {index}. The audit node kept its copy.",
+    "ledger-quota": "{machine}: the {chain} ledger was refused, {reason}.",
     "broken-chain": "{machine}: a broken {chain} ledger was refused at record {index}.",
     "bad-signature": "{machine}: a batch with a bad signature was refused.",
     "bad-status-signature": "{machine}: a status with a bad signature was refused.",

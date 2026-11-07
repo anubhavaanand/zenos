@@ -108,6 +108,15 @@ class DataStore(unittest.TestCase):
             other._key(rec, "tanaka", zdata.idp_token(self.idp, "tanaka", aud="tax"), "casework")
         self.assertEqual(self.db.get(rid, "tanaka", self.tanaka, "casework"), {"x": 1})
 
+    def test_one_server_cannot_fill_a_storage_peer(self):
+        self.db.put("cases", {"x": 1}, 2)
+        c = json.loads(json.dumps(self.conf))
+        c["servers"]["cases"]["quota_records"] = 1
+        for p in self.stores:
+            self.write_conf(p, c)
+        with self.assertRaises(Exception):
+            self.db.put("cases", {"x": 2}, 2)                  # past its share: refused on every peer
+
     def test_unsigned_requests_leave_no_trace(self):
         peer = self.keys[0]
         f = peer.dir / "ledger.jsonl"

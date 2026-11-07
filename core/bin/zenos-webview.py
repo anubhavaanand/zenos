@@ -301,6 +301,35 @@ def on_load(wv, ev):
 
 view.connect('load-changed', on_load)
 
+
+# the window stays on the app it was opened for: a link in a document (or anything else) cannot take the window,
+# with the file's content and the level clipboard, to another page. Links open in the browser instead.
+def _same_app(uri):
+    from urllib.parse import urlsplit
+    a, b = urlsplit(uri), urlsplit(url)
+    if a.scheme in ('about', 'blob', 'data'):                 # the app's own frames and generated content
+        return True
+    return (a.scheme, a.hostname, a.port) == (b.scheme, b.hostname, b.port)
+
+
+def on_decide(_v, decision, kind):
+    if kind in (WebKit2.PolicyDecisionType.NAVIGATION_ACTION, WebKit2.PolicyDecisionType.NEW_WINDOW_ACTION):
+        req = decision.get_navigation_action().get_request()
+        target = req.get_uri() if req else ''
+        if not _same_app(target):
+            decision.ignore()
+            if not sealed and target.startswith(('https://', 'http://')) and decision.get_navigation_action().is_user_gesture():
+                try:
+                    import subprocess
+                    subprocess.Popen(['xdg-open', target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except OSError:
+                    pass
+            return True
+    return False
+
+
+view.connect('decide-policy', on_decide)
+
 view.load_uri(url)
 win.add(view)
 win.connect('destroy', Gtk.main_quit)

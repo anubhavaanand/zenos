@@ -49,4 +49,12 @@ side, the apps and storage), with run 1's findings known to them. 21 weaknesses 
 more that the run pointed at but did not confirm were checked and fixed too (five of them with tests). Which ones they were is published here
 once a release carries the fixes.
 
+## Run 3 (source at `7eda2eb`, fixed in the source, 7 Nov 2026)
+
+Six hunters again: the messenger, the root services, the server side, the apps, the supply chain and public
+infrastructure, and one whose only task was to break run 2's fixes. 10 weaknesses confirmed and 7 more found by
+reading the source, all fixed with tests; 4 further points tightened. One hunter's review of part of the messenger's
+federation code was cut short and goes into the next run. Which ones they were is published here once a release
+carries the fixes.
+
 Changes others may notice are in the [CHANGELOG](../CHANGELOG.md) under 0.2.0.

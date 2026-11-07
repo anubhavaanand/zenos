@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Self-audit run 3 of at least 3: 10 weaknesses confirmed and 7 more found by reading the source, all fixed with
+  tests; 4 further points the run raised were tightened too. What each one was is published once a release carries
+  the fixes ([SECURITY.md](SECURITY.md), [docs/SELF_AUDIT.md](docs/SELF_AUDIT.md)).
+- Operators of the server side: the audit node now answers questions about PCs (health, opening history) only to an
+  enrolled reader. Enroll the key service once with `zenos_auditnode.py --enroll-reader keysvc <key>`
+  ([docs/KEY_SERVICE.md](docs/KEY_SERVICE.md)); until then the key service releases no keys.
+- Release officers: `zenos_release.py sign` now shows what is about to be signed and checks it against the officer's
+  own copy of the package (`--deb`), or asks for the start of its SHA-256.
+
 - Self-audit run 2 of at least 3 (Cloudflare's security-audit-skill): 21 confirmed weaknesses (fixed with tests) and 7
   further ones the run pointed at (fixed too), all in the source. What each one was is published once a release carries the
   fixes ([SECURITY.md](SECURITY.md), [docs/SELF_AUDIT.md](docs/SELF_AUDIT.md)).

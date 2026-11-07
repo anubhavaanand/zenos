@@ -33,9 +33,14 @@ import zident                                                      # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey   # noqa: E402
 from cryptography.hazmat.primitives import serialization          # noqa: E402
 
-NAME = re.compile(r"^(?!.*__)[A-Za-z0-9_.-]{1,64}$")   # no "__": it joins machine and chain in file names
+NAME = re.compile(r"^(?!.*__)(?!_)(?!.*_$)[A-Za-z0-9_.-]{1,64}$")   # no "__", none at an end: "__" joins machine and chain in file names
 MAX_BATCH = 2000
 lock = threading.Lock()
+status_lock = threading.Lock()        # heartbeats never wait behind another PC's chain work
+# what one PC may keep here: no PC (nor a person on it, through their own ledger) fills the node's disk for the rest
+MAX_CHAINS = int(os.environ.get("ZENOS_AUDIT_MAX_CHAINS", "64"))
+MAX_MACHINE_BYTES = int(os.environ.get("ZENOS_AUDIT_MAX_MACHINE_BYTES", str(4 << 30)))
+MAX_USER_CHAIN_BYTES = int(os.environ.get("ZENOS_AUDIT_MAX_USER_CHAIN_BYTES", str(256 << 20)))
 
 
 def canon(o):
@@ -71,9 +76,31 @@ class Node:
             with os.fdopen(fd, "wb") as f:
                 f.write(Ed25519PrivateKey.generate().private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption()))
         self.key = Ed25519PrivateKey.from_private_bytes(kp.read_bytes())
+        self._held = {}                      # chain file -> (size, hashes): read once, then followed as it grows
+        self._quota_said = {}
 
     def pub_b64(self):
         return base64.b64encode(self.key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+
+    def enroll_reader(self, name, pub_b64):
+        """a service allowed to read PCs' health and opening history (the key service)"""
+        if not NAME.match(name):
+            raise ValueError("bad reader name")
+        raw = base64.b64decode(pub_b64, validate=True)
+        zident.check_pub(raw)
+        (self.dir / "readers").mkdir(exist_ok=True)
+        (self.dir / "readers" / f"{name}.pub").write_bytes(raw)
+
+    def reader_ok(self, path, headers):
+        """a GET signed by an enrolled reader: over "GET <path> <time>", within SKEW of now"""
+        try:
+            name, t, sig = headers.get("X-Zenos-Reader", ""), headers.get("X-Zenos-Time", ""), headers.get("X-Zenos-Sig", "")
+            if not NAME.match(name) or abs(time.time() - int(t)) > SKEW:
+                return False
+            pk = self.dir / "readers" / f"{name}.pub"
+            return pk.exists() and zident.verify(pk.read_bytes(), base64.b64decode(sig), f"GET {path} {int(t)}".encode())
+        except Exception:
+            return False
 
     def enroll(self, machine, pub_b64):
         if not NAME.match(machine):
@@ -105,11 +132,31 @@ class Node:
 
     def held(self, machine, chain):
         p = self.chain_path(machine, chain)
+        try:
+            size = p.stat().st_size
+        except OSError:
+            return []
+        c = self._held.get(p)
+        if c and c[0] == size:
+            return list(c[1])
         hashes = []
-        if p.exists():
-            with open(p, encoding="utf-8") as f:
-                hashes = [json.loads(l)["hash"] for l in f if l.strip()]
-        return hashes
+        with open(p, encoding="utf-8") as f:
+            hashes = [json.loads(l)["hash"] for l in f if l.strip()]
+        self._held[p] = (size, hashes)
+        return list(hashes)
+
+    def over_quota(self, machine, chain, add):
+        """why `add` more bytes on this chain would be too much for this PC, or None"""
+        files = list((self.dir / "chains").glob(f"{machine}__*.jsonl"))
+        mine = self.chain_path(machine, chain)
+        if mine not in files and len(files) >= MAX_CHAINS:
+            return "too many ledgers"
+        total = sum(f.stat().st_size for f in files)
+        if total + add > MAX_MACHINE_BYTES:
+            return "this PC's ledgers are full"
+        if chain != "guard" and (mine.stat().st_size if mine.exists() else 0) + add > MAX_USER_CHAIN_BYTES:
+            return "this ledger is full"
+        return None
 
     def receipt(self, machine, chain, count, last):
         r = {"machine": machine, "chain": chain, "count": count, "last": last, "t": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
@@ -147,7 +194,7 @@ class Node:
         except Exception:
             self.alert("bad-signature", machine=machine, chain=chain)
             return 403, {"ok": False, "error": "signature does not verify"}
-        with lock:
+        with status_lock:
             # a PC counts as heard from only by a signed status that is fresh (within SKEW of this node's clock) and
             # newer than the last one taken: an old batch sent again neither hides a silent PC nor a stopped service
             if isinstance(b.get("status"), dict):
@@ -167,6 +214,7 @@ class Node:
                     seen.write_text(str(min(time.time(), float(t))))
                     if t > self.status_t(machine):
                         self.note_status(machine, b["status"])
+        with lock:
             held = self.held(machine, chain)
             n = len(held)
             if frm > n:
@@ -187,15 +235,26 @@ class Node:
                 return 422, {"ok": False, "error": "broken chain", "index": n + (j or 0)}
             prev = head
             for rec in new:                                       # what the PC itself reported as an alert
-                if rec.get("event") in PC_ALERTS:
+                # only from the root-written guard ledger: a person's own ledger ("user-*") is theirs to write, and
+                # an alert from it would be forged, and would hide the real one for the notifier's quiet time
+                if chain == "guard" and rec.get("event") in PC_ALERTS:
                     self.alert(rec["event"], machine=machine, reason=str(rec.get("reason") or rec.get("first") or "")[:200],
                                path=str(rec.get("file") or ""))
             if new:
-                with open(self.chain_path(machine, chain), "a", encoding="utf-8") as f:
-                    for rec in new:
-                        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                lines = "".join(json.dumps(rec, ensure_ascii=False) + "\n" for rec in new)
+                why = self.over_quota(machine, chain, len(lines.encode()))
+                if why:
+                    last = self._quota_said.get((machine, chain), 0)
+                    if time.time() - last > 3600:                   # said once an hour, not on every refused batch
+                        self._quota_said[(machine, chain)] = time.time()
+                        self.alert("ledger-quota", machine=machine, chain=chain, reason=why)
+                    return 507, {"ok": False, "error": why}
+                p = self.chain_path(machine, chain)
+                with open(p, "a", encoding="utf-8") as f:
+                    f.write(lines)
                     f.flush()
                     os.fsync(f.fileno())
+                self._held[p] = (p.stat().st_size, held + [r.get("hash") for r in new])
             count = n + len(new)
             return 200, {"ok": True, "added": len(new), **self.receipt(machine, chain, count, prev)}
 
@@ -500,6 +559,10 @@ def serve(node, host, port, cert=None, key=None, silence=90, peers=(), check_eve
             if r:
                 return self.reply(200, {"ok": True, **node.release(r.group(1))})
             h = re.match(r"^/v1/(health|unseals)/([A-Za-z0-9_.-]{1,64})(?:\?from=(\d{1,9}))?$", self.path)
+            if h and not node.reader_ok(self.path, self.headers):
+                # who opened which file on which PC, and which PCs are stopped: only for an enrolled reader (the key
+                # service), never for anyone who can reach this port
+                return self.reply(403, {"ok": False, "error": "signed request from an enrolled reader needed"})
             if h:
                 kind, machine, frm = h.groups()
                 return self.reply(200, {"ok": True, **(node.health(machine) if kind == "health"
@@ -542,6 +605,10 @@ def main():
         i = a.index("--enroll")
         node.enroll(a[i + 1], a[i + 2])
         return print(f"enrolled {a[i + 1]}")
+    if "--enroll-reader" in a:      # the key service: zenos_keysvc.py --show-key gives its public key
+        i = a.index("--enroll-reader")
+        node.enroll_reader(a[i + 1], a[i + 2])
+        return print(f"reader {a[i + 1]} enrolled")
     if "--consortium-status" in a:   # the history a majority of the consortium agrees on
         i = a.index("--consortium-status")
         port = int(opt("--port", "8443"))

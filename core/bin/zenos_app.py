@@ -86,7 +86,9 @@ def safe_path(p):
 
 PATH_ARGS = {"read": ("path",), "list": ("dir",), "thumb": ("path",), "img_preview": ("src",), "img_segment": ("src",),
              "export_image": ("src", "dir"), "move_file": ("path", "dest"), "pick_dir": ("path", "dir"),
-             "studio_peaks": ("path",), "open": ("dir",), "save": ("dir",), "cloud_url": (), "cloud_ls": ()}
+             "studio_peaks": ("path",), "open": ("dir",), "save": ("dir",), "cloud_url": (), "cloud_ls": (),
+             "studio_ai": ("image",), "studio_export_audio": ("src",), "studio_export_video": ("audio", "image", "clip"),
+             "subset_font": ("path",), "exists": ("path",)}
 
 
 class App(Gtk.Window):

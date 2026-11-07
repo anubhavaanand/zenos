@@ -9,7 +9,8 @@ officer key, and neither does any central service.
   zenos_release.py keygen --out OFFICER.key                 a new officer key (prints the public key for the PCs)
   zenos_release.py manifest DEB --origin zenos|debian|nodesource [--rings 0=0,1=+1d,2=+3d] [--apt-check]
                    [--buildinfo FILE] [--rebuilt NAME=SHA256 ...] --out RECORD.json
-  zenos_release.py sign RECORD.json --key OFFICER.key --by NAME
+  zenos_release.py sign RECORD.json --key OFFICER.key --by NAME [--deb YOUR-COPY.deb]
+      (shows what is signed; with --deb it must describe your own copy, else you type the start of its SHA-256)
   zenos_release.py verify RECORD.json --keys DIR --required N
   zenos_release.py revoke SHA256 --reason TEXT --out RECORD.json      (then sign it like a release)
   zenos_release.py model FOLDER --name N --version V --publisher P --source URL --licence L --max-level 0..5
@@ -47,6 +48,41 @@ def rings_arg(s, now=None):
 
 def load_key(p):
     return Ed25519PrivateKey.from_private_bytes(Path(p).read_bytes())
+
+
+def record_sha(rec):
+    m = rec.get("manifest") if isinstance(rec.get("manifest"), dict) else None
+    r = rec.get("revoke") if isinstance(rec.get("revoke"), dict) else None
+    return str((m or r or {}).get("sha256", ""))
+
+
+def describe(rec):
+    """what an officer is about to sign, in plain lines"""
+    k = zsupply.kind(rec)
+    if k == "revoke":
+        r = rec["revoke"]
+        return f"REVOKE  sha256 {r.get('sha256')}\n        reason {r.get('reason')!r}"
+    if k != "release":
+        sys.exit("Not a release or revocation record.")
+    m = rec["manifest"]
+    rings = ", ".join(f"ring {r} from {time.strftime('%Y-%m-%d %H:%M', time.localtime(int(t))) if int(t) else 'now'}"
+                      for r, t in sorted((m.get("rings") or {}).items()))
+    lines = [f"RELEASE {m.get('kind')}  {m.get('name')} {m.get('version')} {m.get('arch', '')}",
+             f"        sha256 {m.get('sha256')}",
+             f"        origin {m.get('origin')}   size {m.get('size')}   files {len(m.get('files') or {})}",
+             f"        rollout {rings or '-'}"]
+    for k2 in ("provider", "host", "model", "max_level"):
+        if k2 in m:
+            lines.append(f"        {k2} {m[k2]}")
+    return "\n".join(lines)
+
+
+def same_package(mine, theirs):
+    """the parts of a manifest that come from the package file itself"""
+    if not isinstance(theirs, dict):
+        return False
+    keys = ("name", "version", "arch", "sha256", "size", "files", "links", "conffiles")
+    return all(mine.get(k) == theirs.get(k) for k in keys)
 
 
 def main():
@@ -109,7 +145,24 @@ def main():
         return print("revocation", rec["digest"][:16])
     if cmd == "sign":
         p = Path(a[1])
-        rec = zsupply.sign(json.loads(p.read_text()), load_key(opt("--key")), opt("--by"))
+        rec = json.loads(p.read_text())
+        # an officer signs what they are shown: the record is printed, and checked against the officer's own copy of
+        # the package (--deb) or confirmed by typing the start of its SHA-256; whoever carried the file chooses nothing
+        print(describe(rec))
+        if opt("--deb"):
+            mine = zsupply.manifest(opt("--deb"), origin=rec.get("manifest", {}).get("origin", "zenos"),
+                                    rings=rec.get("manifest", {}).get("rings"))
+            if not same_package(mine, rec.get("manifest")):
+                sys.exit("Not signed: the record does not describe your copy of the package.")
+        else:
+            want = record_sha(rec)[:8]
+            try:
+                got = input(f"Type the first 8 characters of the SHA-256 to sign it (anything else stops): ")
+            except EOFError:
+                got = ""
+            if got.strip().lower() != want:
+                sys.exit("Not signed.")
+        rec = zsupply.sign(rec, load_key(opt("--key")), opt("--by"))
         p.write_text(json.dumps(rec, indent=1))
         return print(f"signed by {opt('--by')}: {len(rec['sigs'])} signature(s)")
     if cmd == "verify":

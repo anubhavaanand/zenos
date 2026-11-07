@@ -53,6 +53,12 @@ let fail = 0; const check = (name, cond, got) => { console.log((cond ? "ok   " :
   r = await rq(M, "mallory", "POST", "/channels", { id: "open-room", name: "#x", level: 1, members: ["mallory", "tanaka"], by: "mallory" });
   const [, chs] = await rq(T, "tanaka", "GET", "/channels?member=tanaka");
   check("a new channel holds only its creator; others come in through invite", r[0] === 200 && !chs.some((c) => c.id === "open-room"), chs);
+  // someone let in at L1, then the channel raised: refused while that member is not cleared for the new level
+  r = await rq(T, "tanaka", "POST", "/channels", { id: "raise-room", name: "#r", level: 1, by: "tanaka" });
+  r = await rq(T, "tanaka", "POST", "/channels/raise-room/invite", { by: "tanaka", target: "mallory" });
+  const added = r[0] === 200;
+  r = await rq(T, "tanaka", "POST", "/channels", { id: "raise-room", name: "#r", level: 4, by: "tanaka" });
+  check("a channel cannot be raised above a member's clearance", added && r[0] === 403, r);
   // a relay that registers new accounts only with an administrator's enrollment code
   const port2 = PORT + 1, R2 = `http://127.0.0.1:${port2}`, HOME2 = fs.mkdtempSync(path.join(os.tmpdir(), "zbind-"));
   const relay2 = spawn(process.execPath, [path.join(MSG, "relay.js")], { env: { ...process.env, HOME: HOME2, ZENOS_RELAY_DIRECTORY: path.join(__dirname, "fixtures", "msg-directory.json"), ZENOS_RELAY_PORT: String(port2), ZENOS_RELAY_ENROLL: "1" }, stdio: "ignore" });

@@ -64,6 +64,17 @@ const wait = async (f, ms = 15000) => { const t = Date.now(); while (Date.now() 
   check("sato replies", r.ok, r);
   const back = await wait(async () => (await j(za + "/api/all")).find((m) => m.dir === "in" && m.from === "sato@city.example"));
   check("zenos reads the reply, from sato@city.example", back && back.text === "Confirmed, 3 shelters open.", back);
+  // an L3 meeting: a phone that is not government-issued sees that there is one, not what it is, and cannot change it
+  const hc = home(); run([path.join(MSG, "client.js"), "tanaka", String(base + 30)], { HOME: hc, ZENOS_RELAY: A.url });
+  await wait(async () => (await plain(`http://127.0.0.1:${base + 30}/api/me`)).status);
+  await wait(async () => { const x = await j(za + "/api/event", "POST", { to: "tanaka", level: 3, ev: { title: "probe", date: "2026-12-01" } }); return x.ok; });
+  r = await j(za + "/api/event", "POST", { to: "tanaka", level: 3, ev: { title: "L3 site visit", date: "2026-12-01", place: "Annex 4", note: "secret note" } });
+  const l3 = await wait(async () => (await j(za + "/api/all")).find((m) => m.kind === "event" && m.level === 3));
+  const seen = await (await plain(rp + "/api/all", { headers: { Cookie: sid } })).text();
+  check("such a phone does not read an L3 meeting", !!l3 && !seen.includes("Annex 4") && !seen.includes("secret note"), seen.slice(0, 200));
+  const upd = await (await plain(rp + "/api/evupd", { method: "POST", headers: { Cookie: sid }, body: JSON.stringify({ target: l3 && l3.id, ev: { place: "moved" } }) })).json();
+  const rs = await (await plain(rp + "/api/rsvp", { method: "POST", headers: { Cookie: sid }, body: JSON.stringify({ target: l3 && l3.id, status: "no" }) })).json();
+  check("nor change or answer it", !!upd.error && !!rs.error, { upd, rs });
   // a file across organizations
   const fileText = "School,Beds\nNorth,120\nSouth,80\n";
   r = await (await fetch(za + "/api/attach?to=sato@city.example&level=2&name=shelters.csv&mime=text/csv&text=" + encodeURIComponent("The list."), { method: "POST", body: fileText })).json();

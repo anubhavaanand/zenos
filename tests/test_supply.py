@@ -237,10 +237,47 @@ class DpkgWrapper(unittest.TestCase):
             self.assertEqual(W.main(["--install", "--", "-x.deb"]), 2)
         finally:
             os.chdir(REPO)
+        # a name missing or a folder at check time could be a file when dpkg opens it: refused, dpkg not started
+        self.assertEqual(W.main(["--unpack", str(good), str(tmp / "later.deb")]), 2)
+        (tmp / "adir").mkdir()
+        self.assertEqual(W.main(["-i", str(tmp / "adir")]), 2)
+        self.assertEqual(W.main(["--admindir", str(tmp / "adir"), "--unpack", str(tmp / "later.deb")]), 2)
         self.assertEqual(len((tmp / "read").read_text().splitlines()), 1)
         for k in ("ZENOS_REAL_DPKG", "ZENOS_DPKG_STAGE", "ZENOS_PKGCHECK_CACHE", "ZENOS_PKGCHECK_LEDGER", "ZENOS_SUPPLY_CONF"):
             os.environ.pop(k, None)
         importlib.reload(Z); importlib.reload(P)
+
+
+class OfficerSigning(unittest.TestCase):
+    """an officer signs what they are shown, checked against their own copy: the carrier of the file chooses nothing"""
+    def test_sign_shows_and_checks_the_package(self):
+        import subprocess
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+        tmp = Path(tempfile.mkdtemp(prefix="zenos-sign-"))
+        good = make_deb(tmp, "zenos-s", "1.0", b"good")
+        other = make_deb(tmp, "zenos-s", "1.0", b"swapped")
+        key = tmp / "ito.key"
+        key.write_bytes(Ed25519PrivateKey.generate().private_bytes(serialization.Encoding.Raw,
+                        serialization.PrivateFormat.Raw, serialization.NoEncryption()))
+        rec = tmp / "r.json"
+        tool = str(REPO / "system" / "sbin" / "zenos_release.py")
+
+        def sign(*extra, typed=""):
+            rec.write_text(json.dumps({"manifest": zsupply.manifest(str(other))}))   # the carrier swapped the file
+            r = subprocess.run([sys.executable, tool, "sign", str(rec), "--key", str(key), "--by", "ito", *extra],
+                               input=typed, capture_output=True, text=True)
+            return r, json.loads(rec.read_text()).get("sigs", [])
+        r, sigs = sign("--deb", str(good))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(sigs, [])
+        self.assertIn(zsupply.sha256_file(str(other)), r.stdout)       # what would be signed is shown
+        r, sigs = sign(typed="no\n")
+        self.assertEqual((r.returncode != 0, sigs), (True, []))
+        r, sigs = sign(typed=zsupply.sha256_file(str(other))[:8] + "\n")
+        self.assertEqual((r.returncode, len(sigs)), (0, 1))
+        r, sigs = sign("--deb", str(other))
+        self.assertEqual((r.returncode, len(sigs)), (0, 1))
 
 
 if __name__ == "__main__":

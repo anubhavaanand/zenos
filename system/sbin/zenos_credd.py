@@ -185,7 +185,7 @@ def caller(pid):
             args = args[1:]
         script, kinds = (args[0] if args else ""), (("browser", BROWSERS),)
     elif exe == "node":
-        if env.get("NODE_OPTIONS", "") not in NODE_OPTIONS_OK:
+        if env.get("NODE_OPTIONS", "") not in NODE_OPTIONS_OK or "NODE_PATH" in env:   # NODE_PATH loads other modules
             return None
         script, kinds = (args[0] if args else ""), (("messenger", MESSENGERS),)
     else:
