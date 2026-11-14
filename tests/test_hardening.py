@@ -230,5 +230,24 @@ class OpenHolders(unittest.TestCase):
             self.assertFalse(ns.holders_alive(path))                    # L3 does not cut the network
 
 
+class DropList(unittest.TestCase):
+    """an anyone-can-receive service (webhook.site and the like) is cut at the first byte for every account, in
+    monitor mode too; an address a listed destination shares is never cut"""
+    def test_cut_for_a_person_too(self):
+        import importlib
+        import zenos_netsentinel as ns
+        importlib.reload(ns)
+        self.assertIn("webhook.site", ns.DROP_DEFAULT)
+        ns.SYS["mode"] = "monitor"
+        ns.drop_ips.clear(); ns.drop_ips.update({"203.0.113.9", "198.51.100.7"})
+        ns.sys_ips.clear(); ns.sys_ips.add("198.51.100.7")       # also an update mirror's address
+        ns.sys_seen.clear()
+        ns.log = lambda rec: None
+        ns.proc_info = lambda pid: {"pid": pid, "uid": 1000}       # a person's program
+        self.assertTrue(ns.system_check(4242, "203.0.113.9", 443, "curl"))
+        self.assertFalse(ns.system_check(4242, "198.51.100.7", 443, "apt"))
+        self.assertFalse(ns.system_check(4242, "192.0.2.1", 443, "firefox"))   # anything else: not this rule
+
+
 if __name__ == "__main__":
     unittest.main()

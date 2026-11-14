@@ -47,7 +47,9 @@ BULK_READ_N, BULK_READ_SEC = 6, 20
 BULK_XFER_N, BULK_XFER_SEC = 5, 30
 RULE_TEXT = {"exfiltration": "a protected file was copied to the USB Drive",
              "bulk-transfer": "many files were copied to the USB Drive at once",
-             "bulk-read": "many protected files were opened at once"}
+             "bulk-read": "many protected files were opened at once",
+             "recon-burst": "many system-survey commands ran within seconds (the pace of an automated intrusion)",
+             "directory-sweep": "the user and group directory was read again and again within seconds"}
 # the display path keeps running so the stop notice can be seen: X server and the compositing window manager
 # (when KWin composites, nothing new reaches the screen while it is frozen)
 DISPLAY_SERVERS = {"Xorg", "Xvnc", "Xtigervnc", "Xwayland", "X", "kwin_x11", "kwin_wayland", "kscreenlocker_greet"}
@@ -760,6 +762,95 @@ def program_paths(names):
     return out
 
 
+# ---------------- automated intrusion: survey commands at machine speed ----------------
+# AI-driven intrusion tools run a survey in bursts of a few seconds (ARTEX: 2-25 s bursts, 110,000 directory
+# objects read in one go; GTIG/Mandiant, 30 Oct 2026), a pace no person at a keyboard keeps. Detecting it is not
+# enough on its own: a burst stops the PC (halt), and a stopped PC gets no keys from the key service, whoever has
+# taken root on it. Only these program files are marked (notification only: nothing waits for the guard).
+RECON = ["whoami", "id", "uname", "hostnamectl", "ip", "ifconfig", "ss", "netstat", "ps", "w", "who", "last",
+         "lastlog", "arp", "route", "nmap", "lsof", "crontab", "getcap", "groups", "dig", "nslookup", "host", "nc",
+         "ncat", "socat"]
+DIRECTORY = ["getent", "ldapsearch", "ldapwhoami", "wbinfo", "net", "rpcclient", "samba-tool", "adcli", "realm",
+             "sssctl", "smbclient", "klist"]
+RECON_N, RECON_SEC = 10, 10            # distinct survey programs within the window
+SWEEP_N, SWEEP_SEC = 6, 10             # directory reads within the window
+FAN_OPEN_EXEC = 0x00001000
+_execs = []                            # (t, uid, program name)
+
+
+UPDATERS = {"dpkg", "apt", "apt-get", "aptitude", "unattended-upgr", "packagekitd", "zenos-dpkg", "zenos_pkgcheck"}
+
+
+def _ours(pid):
+    """started by a ZENOS program (the system monitor runs some of these on a timer) or by an install (package
+    scripts look up users and groups many times), or within the first minutes after boot"""
+    try:
+        if float(open("/proc/uptime").read().split()[0]) < 300:
+            return True
+        for _ in range(12):
+            st = open(f"/proc/{pid}/status").read()
+            ppid = int(st.split("PPid:")[1].split()[0])
+            if ppid <= 1:
+                return False
+            comm = open(f"/proc/{ppid}/comm").read().strip()
+            cmd = Path(f"/proc/{ppid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="ignore")
+            if comm in UPDATERS or any(x in cmd for x in ("/usr/share/zenos/", "/usr/lib/zenos/", "/usr/sbin/zenos")):
+                return True
+            pid = ppid
+    except (OSError, ValueError, IndexError):
+        return False
+    return False
+
+
+def on_exec(pid, prog, now=None):
+    """one start of a survey or directory program: a burst stops the PC"""
+    now = now or time.time()
+    name = os.path.basename(prog)
+    if pid == ME or halted() or _ours(pid):
+        return
+    uid = proc_uid(pid)
+    _execs.append((now, uid, name))
+    keep = max(RECON_SEC, SWEEP_SEC)
+    while _execs and now - _execs[0][0] > keep:
+        _execs.pop(0)
+    mine = [(t, n) for t, u, n in _execs if u == uid]
+    survey = {n for t, n in mine if now - t <= RECON_SEC and n in RECON + DIRECTORY}
+    sweep = [n for t, n in mine if now - t <= SWEEP_SEC and n in DIRECTORY]
+    for rule, hit, n in (("directory-sweep", len(sweep) >= SWEEP_N, len(sweep)),
+                         ("recon-burst", len(survey) >= RECON_N, len(survey))):
+        if hit:
+            if plan_allows(rule, 4, n):
+                return
+            log(event="anomaly", rule=rule, uid=uid, programs=sorted(survey)[:20], count=n)
+            _execs.clear()
+            halt(rule, [], 4, culprit=pid)
+            return
+
+
+def recon_guard():
+    paths = program_paths(RECON + DIRECTORY) | {os.path.realpath(p) for n in RECON + DIRECTORY
+                                                for p in (f"/usr/sbin/{n}", f"/sbin/{n}") if os.path.exists(p)}
+    if not paths or policy("recon_watch", "on") != "on":
+        log(event="recon-guard", state="off")
+        return
+    fd = _libc.fanotify_init(FAN_CLASS_NOTIF | FAN_CLOEXEC, os.O_RDONLY | os.O_LARGEFILE)
+    if fd < 0:
+        log(event="recon-guard", state="unavailable", errno=ctypes.get_errno())
+        return
+    for p in sorted(paths):
+        _libc.fanotify_mark(fd, FAN_MARK_ADD, ctypes.c_uint64(FAN_OPEN_EXEC), AT_FDCWD, os.fsencode(p))
+    log(event="recon-guard", state="on", programs=len(paths))
+    while True:
+        try:
+            for mask, pid, path in fan_events(fd):
+                if path and mask & FAN_OPEN_EXEC:
+                    on_exec(pid, path)
+        except InterruptedError:
+            continue
+        except Exception as e:
+            print("recon:", e, file=sys.stderr, flush=True)
+
+
 def terminal_guard():
     terms = program_paths(TERMINALS) if policy("terminal", "blocked") == "blocked" else set()
     shots = program_paths(SCREENSHOTS) if policy("screenshots", "blocked-while-sealed") == "blocked-while-sealed" else set()
@@ -972,6 +1063,7 @@ def main():
     threading.Thread(target=serve, daemon=True).start()
     threading.Thread(target=enforce_loop, daemon=True).start()
     threading.Thread(target=terminal_guard, daemon=True).start()
+    threading.Thread(target=recon_guard, daemon=True).start()
     while True:
         try:
             init_user()                                   # again after a change of desktop user

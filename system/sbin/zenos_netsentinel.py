@@ -31,6 +31,15 @@ ACTIONS = ("terminate", "keep_contained", "escalate")
 # system service has no business with any name that is not on this list. "monitor" records, "enforce" cuts.
 SYS_CFG = "/etc/zenos/egress-system.json"
 SYS_DEFAULT = {"mode": "monitor", "names": ["deb.debian.org", "security.debian.org", "deb.nodesource.com"]}
+# Services where anyone can open a receiving address in seconds, with no account: automated intrusion tools send
+# their command output there (ARTEX used 491 rotating webhook.site addresses; GTIG/Mandiant, 30 Oct 2026). No
+# account on a ZENOS PC, a person's included, reaches them, in either mode; "drop_names" in egress-system.json
+# replaces this list.
+DROP_DEFAULT = ["webhook.site", "requestbin.com", "requestbin.net", "pipedream.net", "eo.pipedream.net",
+                "beeceptor.com", "requestcatcher.com", "hookbin.com", "postb.in", "ptsv3.com", "ngrok.io",
+                "ngrok-free.app", "ngrok.app", "oast.fun", "oast.live", "oast.me", "oast.online", "oast.pro",
+                "oast.site", "interact.sh", "burpcollaborator.net", "oastify.com", "dnslog.cn", "ceye.io",
+                "canarytokens.com", "trycloudflare.com", "localtunnel.me", "loca.lt", "serveo.net"]
 
 cfg = dict(DEFAULT)
 try:
@@ -70,6 +79,7 @@ try:
 except Exception:
     pass
 sys_ips, sys_seen = set(), {}             # resolved addresses of the listed names; (uid class, ip) -> decided
+drop_ips = set()                          # resolved addresses of the drop list (never one a listed name also uses)
 
 
 def system_names():
@@ -129,6 +139,15 @@ def resolve_loop():
             del seen[ip]
         sys_ips.clear()
         sys_ips.update(seen)
+        drop = set()
+        for name in SYS.get("drop_names", DROP_DEFAULT):
+            try:
+                for ai in socket.getaddrinfo(name, 443, proto=socket.IPPROTO_TCP):
+                    drop.add(ai[4][0])
+            except OSError:
+                pass
+        drop_ips.clear()
+        drop_ips.update(drop - sys_ips)     # an address a needed destination shares (a CDN) is never cut
         time.sleep(300)
 
 
@@ -143,6 +162,10 @@ def system_check(pid, ip, port, comm):
         return False
     listed = allowed(ip) or ip in sys_ips
     loop = ipaddress.ip_address(ip).is_loopback
+    if ip in drop_ips and not listed and not loop:
+        log({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "type": "egress-drop-listed", "dst": ip, "port": port,
+             "comm": comm, "proc": info, "cut": True})
+        return True                         # any account: an anyone-can-receive service, cut at the first byte
     cut = zdecide.sysegress(system, listed, loop, SYS.get("mode") == "enforce")
     sys_seen[key] = now()
     if system and not listed and not loop:

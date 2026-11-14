@@ -71,6 +71,29 @@ class GuardPaths(unittest.TestCase):
         self.assertEqual(halts, [("bulk-read", 4)])
         G.reads.clear()
 
+    def test_survey_commands_at_machine_speed_stop_the_pc(self):
+        from unittest import mock
+        halts = []
+        with mock.patch.object(G, "halt", lambda rule, paths, level, culprit=None: halts.append(rule)), \
+                mock.patch.object(G, "plan_allows", lambda *a: False), mock.patch.object(G, "halted", lambda: None), \
+                mock.patch.object(G, "_ours", lambda pid: False), mock.patch.object(G, "proc_uid", lambda pid: 1000):
+            G._execs.clear()
+            t0 = 1_000_000.0
+            for i, n in enumerate(G.RECON[:G.RECON_N - 1]):          # one short of the line: nothing
+                G.on_exec(4242, "/usr/bin/" + n, t0 + i * 0.5)
+            self.assertEqual(halts, [])
+            for i, n in enumerate(G.RECON[:G.RECON_N]):              # the same, a minute later, slowly: nothing
+                G.on_exec(4242, "/usr/bin/" + n, t0 + 60 + i * 3)
+            self.assertEqual(halts, [])
+            G._execs.clear()
+            for i, n in enumerate(G.RECON[:G.RECON_N]):              # ten survey programs in five seconds
+                G.on_exec(4242, "/usr/bin/" + n, t0 + 200 + i * 0.5)
+            self.assertEqual(halts, ["recon-burst"])
+            for i in range(G.SWEEP_N):                                 # the directory read again and again
+                G.on_exec(4243, "/usr/bin/getent", t0 + 400 + i)
+            self.assertEqual(halts, ["recon-burst", "directory-sweep"])
+            G._execs.clear()
+
     def test_quarantine_moves_files_not_links(self):
         secret = self.d / "root-only.txt"
         secret.write_text("root's file")

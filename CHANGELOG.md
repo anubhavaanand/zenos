@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- After GTIG/Mandiant's report on AI-driven intrusion tools (ARTEX and others, 30 Oct 2026): the guard stops the PC
+  when survey or directory commands run at machine speed (a stopped PC gets no keys from the key service); services
+  where anyone can open a receiving address (webhook.site and the like) are cut for every account; a test goes
+  through every file a PC keeps, every 32-byte stretch, and finds nothing that opens a file sealed through the key
+  service ([docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)).
+
 - Self-audit run 3 of at least 3: 10 weaknesses confirmed and 7 more found by reading the source, all fixed with
   tests; 4 further points the run raised were tightened too. What each one was is published once a release carries
   the fixes ([SECURITY.md](SECURITY.md), [docs/SELF_AUDIT.md](docs/SELF_AUDIT.md)).

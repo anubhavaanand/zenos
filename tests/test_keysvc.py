@@ -128,6 +128,45 @@ class KeyService(unittest.TestCase):
         self.assertIn(("key-release", h["fid"]), ev)
         self.assertTrue(zenos_keysvc.zledger.verify(self.svc.ledger)[0])     # the service's own log is one chain
 
+    def test_root_searching_everything_on_the_pc_finds_no_key(self):
+        """someone with root goes through every file the PC keeps (keys, logs, ledgers, settings, the files the
+        open left behind), every 32-byte stretch of it, raw, base64 or hex: none opens the sealed file. And a PC
+        that has been stopped (an automated intrusion trips the guard within seconds) gets no key from the service."""
+        import binascii, re as _re
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        blob = self.seal(3, b"the budget")
+        self.assertTrue(self.open(blob)["ok"])                       # opened once: whatever that leaves is there too
+        h, (_, hb, ct) = self.header(blob), self.K.parse_verify(blob)
+        nonce = base64.b64decode(h["nonce"])
+
+        def opens(k):
+            try:
+                AESGCM(k).decrypt(nonce, ct, hb)
+                return True
+            except Exception:
+                return False
+        tried = 0
+        for f in (self.tmp / "pc").rglob("*"):
+            if not f.is_file():
+                continue
+            data = f.read_bytes()
+            pieces = [data]
+            for tok in _re.findall(rb"[A-Za-z0-9+/=_-]{40,}", data):
+                for dec in (lambda t: base64.b64decode(t + b"=" * (-len(t) % 4)),
+                            lambda t: base64.urlsafe_b64decode(t + b"=" * (-len(t) % 4)), binascii.unhexlify):
+                    try:
+                        pieces.append(dec(tok))
+                    except Exception:
+                        pass
+            for piece in pieces:
+                for i in range(0, max(0, len(piece) - 31)):
+                    tried += 1
+                    self.assertFalse(opens(piece[i:i + 32]), f"a key for the sealed file is in {f.name}")
+        self.assertGreater(tried, 1000)
+        self.healthy(halted=True)
+        self.assertEqual(self.open(blob)["error"], "keysvc-halted")
+        self.healthy()
+
     def test_silent_unhealthy_or_stopped_pc_gets_no_key(self):
         blob = self.seal(2)
         self.healthy(seen=time.time() - 600)
