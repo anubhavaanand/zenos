@@ -43,7 +43,7 @@ function commit(){ if(ST.mode==='edit'&&dirty){P({cmd:'save',id:ST.id,title:docu
 window.zpCommit=function(){commit();P({cmd:'close',gen:ST.gen});};
 document.addEventListener('keydown',function(e){
  if(e.key==='Escape'){e.preventDefault();window.zpCommit();}
- else if(e.key==='Enter'&&ST.mode==='edit'&&e.target.tagName!=='SELECT'){e.preventDefault();window.zpCommit();}
+ else if(e.key==='Enter'&&!e.isComposing&&e.keyCode!==229&&ST.mode==='edit'&&e.target.tagName!=='SELECT'){e.preventDefault();window.zpCommit();}
 });
 window.zpShow=function(st){ST=st;dirty=false;var c=document.getElementById('card');c.innerHTML='';c.className='';
  if(st.mode==='edit')renderEdit(c,st);else if(st.mode==='folder')renderFolder(c,st.root,[]);else renderMenu(c,st);

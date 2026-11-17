@@ -789,7 +789,7 @@ function pickMent(i){const t=mentT,id=mentOpts[i];const s=t.selectionStart,v=t.v
 function mentKeys(e){if(!$("ment").classList.contains("on"))return false;
   if(e.key==="ArrowDown"){mentSel=(mentSel+1)%mentOpts.length;showMent(e.target);}
   else if(e.key==="ArrowUp"){mentSel=(mentSel-1+mentOpts.length)%mentOpts.length;showMent(e.target);}
-  else if(e.key==="Enter"||e.key==="Tab"){pickMent(mentSel);}
+  else if((e.key==="Enter"&&!e.isComposing&&e.keyCode!==229)||e.key==="Tab"){pickMent(mentSel);}
   else if(e.key==="Escape"){$("ment").classList.remove("on");}else return false;
   e.preventDefault();return true;}
 let draftT=null;
@@ -1199,7 +1199,7 @@ async function zrelUI(force){
     await pull();zrelUI(true);};
   if($("zyes"))$("zyes").onclick=()=>answer("approve");
   if($("zno"))$("zno").onclick=()=>answer("decline");
-  if($("zcode"))$("zcode").onkeydown=e=>{if(e.key==="Enter")answer("approve");};
+  if($("zcode"))$("zcode").onkeydown=e=>{if(e.key==="Enter"&&!e.isComposing&&e.keyCode!==229)answer("approve");};
   if($("zclose"))$("zclose").onclick=()=>{zrelGone.add(id);zrelUI(true);};
 }
 async function fillAkey(){
@@ -1429,7 +1429,7 @@ function renderPanel(full){const p=$("cpanel");if(!callPanel){$("callov").classL
     `<div class="cin"><input id="cpmsg" placeholder="Message everyone in the call"><button id="cpsend">Send</button></div>`;
     if(full||!$("cpmsg")){p.innerHTML=html;const send=async()=>{const t=$("cpmsg").value.trim();if(!t)return;const lv=callR?callR.level:1;
       const r=cur.type==="dm"?await post("send",{to:cur.id,text:t,level:lv}):await post("channel-send",{ch:cur.id,text:t,level:lv});if(r&&r.error){$("cperr")&&($("cperr").textContent=r.error);}$("cpmsg").value="";await pull();renderPanel(true);};
-      $("cpsend").onclick=send;$("cpmsg").onkeydown=e=>{if(e.key==="Enter")send();};p.scrollTop=p.scrollHeight;}return;}}
+      $("cpsend").onclick=send;$("cpmsg").onkeydown=e=>{if(e.key==="Enter"&&!e.isComposing&&e.keyCode!==229)send();};p.scrollTop=p.scrollHeight;}return;}}
 document.querySelectorAll("#crail [data-t]").forEach(x=>x.onclick=async()=>{const t=x.dataset.t;$("callerr").textContent="";
   if(t==="hand"){myHand=!myHand;x.classList.toggle("raised",myHand);await callSig({type:"hand",on:myHand});await pull();tickCall();return;}
   if(t==="cc"){$("callerr").textContent="Captions run on a ZENOS PC with an NVIDIA GPU, for L1–L2 calls only. Coming next.";return;}

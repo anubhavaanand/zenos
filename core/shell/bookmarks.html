@@ -101,7 +101,7 @@ function row(it,flat){var r=E('div','row'+(it.id===sel?' sel':''));r.dataset.id=
  be.onclick=function(){r.classList.add('edit');a.focus();a.select();};
  cc.onclick=function(){r.classList.remove('edit');};
  function save(){Z('update',{id:it.id,title:a.value,url:b?b.value:null}).then(load).catch(function(e){toast(e.message,false);});}
- sv.onclick=save;[a,b].forEach(function(x){if(x)x.onkeydown=function(e){if(e.key==='Enter')save();else if(e.key==='Escape')r.classList.remove('edit');};});
+ sv.onclick=save;[a,b].forEach(function(x){if(x)x.onkeydown=function(e){if(e.key==='Enter'&&!e.isComposing&&e.keyCode!==229)save();else if(e.key==='Escape')r.classList.remove('edit');};});
  bd.onclick=function(){del(it.id);};
  g.onpointerdown=function(e){startDrag(e,it,r);};
  return r;}

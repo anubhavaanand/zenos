@@ -165,7 +165,7 @@ function cancel(){Z('cancel');}
 function newFolder(){if(S.mode==='open'&&!S.allowMkdir)return;var l=document.getElementById('list');var em=l.querySelector('.empty');if(em)em.remove();
  var r=E('div','row sel');var nm=E('div','nm',FOLDER());var inp=E('input');inp.value='New folder';nm.appendChild(inp);r.appendChild(nm);r.appendChild(E('div'));r.appendChild(E('div'));l.insertBefore(r,l.firstChild);inp.focus();inp.select();
  var done=false;function commit(ok){if(done)return;done=true;var v=inp.value.trim();if(!ok||!v){render();return;}Z('mkdir',{dir:L.dir,name:v}).then(function(p){return go(L.dir,false).then(function(){sel=[p];render();});}).catch(function(e){render();bar(e.message,'err');});}
- inp.onkeydown=function(e){e.stopPropagation();if(e.key==='Enter')commit(true);else if(e.key==='Escape')commit(false);};inp.onblur=function(){commit(true);};}
+ inp.onkeydown=function(e){e.stopPropagation();if(e.key==='Enter'&&!e.isComposing&&e.keyCode!==229)commit(true);else if(e.key==='Escape')commit(false);};inp.onblur=function(){commit(true);};}
 document.getElementById('q').oninput=function(){render();};
 [].forEach.call(document.querySelectorAll('#cols div'),function(c){c.onclick=function(){var k=c.dataset.k;if(sortK===k)sortD=-sortD;else{sortK=k;sortD=k==='name'?1:-1;}render();};});
 document.getElementById('tb').addEventListener('mousedown',function(e){if(e.button===0&&!e.target.closest('button,input,.light,#path a'))Z('drag');});

@@ -329,7 +329,7 @@ function renderPl(focusTitle){const box=$('plsec');box.innerHTML='';
    d.querySelector('.n').textContent=p.name;d.querySelector('.d').textContent=p.items.length+(p.items.length===1?' video':' videos')+plDur(p);d.onclick=()=>{openPl=p;renderPl();};box.appendChild(d);});
   const nb=document.createElement('button');nb.id='newpl';nb.textContent='+ New playlist';nb.onclick=()=>newPl([]);box.appendChild(nb);return;}
  const p=openPl;const hd=document.createElement('div');hd.className='plhd';hd.innerHTML='<button class="bk" title="Back">‹</button><input class="inset" maxlength="80" title="Rename"><button class="del" title="Delete playlist">Delete</button>';
- const inp=hd.querySelector('input');inp.value=p.name;inp.onchange=()=>{p.name=inp.value.trim()||p.name;inp.value=p.name;savePl();};inp.onkeydown=e=>{if(e.key==='Enter')inp.blur();};
+ const inp=hd.querySelector('input');inp.value=p.name;inp.onchange=()=>{p.name=inp.value.trim()||p.name;inp.value=p.name;savePl();};inp.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing&&e.keyCode!==229)inp.blur();};
  hd.querySelector('.bk').onclick=()=>{openPl=null;renderPl();};
  const del=hd.querySelector('.del');del.onclick=()=>{if(del.dataset.sure){pls=pls.filter(x=>x!==p);openPl=null;savePl();renderPl();return;}del.dataset.sure=1;del.textContent='Delete?';setTimeout(()=>{if(del.isConnected){delete del.dataset.sure;del.textContent='Delete';}},3000);};
  box.appendChild(hd);

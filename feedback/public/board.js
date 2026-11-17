@@ -40,7 +40,7 @@ function signinBox() {
   if (S.signin === "github") return h("button", { cls: "signin", on: { click: () => { location.href = "/auth/github/start"; } } }, "Sign in with GitHub");
   const inp = h("input", { placeholder: "Test handle", maxlength: "15", style: "flex:1;min-width:0" });
   const go = async () => { if (!inp.value.trim()) return inp.focus(); await post("/auth/test", { handle: inp.value.trim() }); render(); };
-  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) go(); });
   return h("div", { style: "display:flex;flex-direction:column;gap:6px;width:100%" },
     h("span", { style: "font-size:11px;color:var(--t-mute)" }, "Local development: test sign-in. The public board uses GitHub sign-in."),
     h("div", { style: "display:flex;gap:6px" }, inp, h("button", { cls: "send", on: { click: go } }, "Sign in")));
@@ -70,7 +70,7 @@ function repliesEl(p) {
     box.replaceChildren(...r.posts.map((x) => postEl(x, true)));
     if (S.me) { const i = h("input", { placeholder: "Reply", maxlength: "1000" }); const e = h("div", { cls: "err" });
       const go = async () => { const r2 = await post("/api/reply", { post: p.id, text: i.value }); if (r2.error) e.textContent = r2.error; else render(); };
-      i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); });
+      i.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.isComposing && ev.keyCode !== 229) go(); });
       box.append(h("div", { cls: "rbox" }, i, h("button", { cls: "send", on: { click: go } }, "Reply")), e); }
   });
   return box;

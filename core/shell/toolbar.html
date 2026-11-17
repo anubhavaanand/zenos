@@ -63,7 +63,7 @@ body.withbar #bm{display:flex}
 <div class="sp"></div>
 <div class="addr">
  <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="#4AD66B" stroke-width="1.8"/><path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="#4AD66B" stroke-width="1.8"/></svg>
- <input id="u" placeholder="Search or enter address" onkeydown="if(event.key==='Enter'){S({cmd:'navigate',url:this.value});this.blur();}">
+ <input id="u" placeholder="Search or enter address" onkeydown="if(event.key==='Enter'&&!event.isComposing&&event.keyCode!==229){S({cmd:'navigate',url:this.value});this.blur();}">
  <button class="ib" id="star" title="Bookmark this page (Ctrl+D)" onclick="S({cmd:'star',x:R(this).right+8,y:0})"><svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" stroke-width="1.6" stroke-linejoin="round"/></svg></button>
 </div>
 <div class="sp"></div>

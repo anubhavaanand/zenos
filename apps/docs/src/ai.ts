@@ -91,7 +91,7 @@ function showUnlock(resolve: (ok: boolean) => void) {
   }
   ;(ov.querySelector('#z-ucancel') as HTMLElement).addEventListener('click', () => done(false))
   ;(ov.querySelector('#z-uok') as HTMLElement).addEventListener('click', tryUnlock)
-  pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryUnlock() })
+  pw.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) tryUnlock() })
   ;(ov.querySelector('#z-reset') as HTMLElement).addEventListener('click', (e) => {
     e.preventDefault()
     if (confirm('Resetting deletes the saved API connection. Continue?')) {
