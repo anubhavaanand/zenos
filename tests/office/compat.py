@@ -360,21 +360,28 @@ def check(src, engine, work):
             # of the two drawings, so the gate refuses real changes and not the drawing's own wobble.
             # Two drawings can agree by chance, so a file whose two drawings differ at all is drawn a third time and
             # the wobble is the farthest pair.
-            draws = [ia]
-            for tag in ("a2", "a3"):
-                if tag == "a3" and res.get("look_noise", 0) == 0:
-                    break
-                p = to_pdf(src, t / tag)
-                if not p:
-                    break
-                draws.append(pages(p, t, tag))
-                sims = [page_similarity(x, y) for i, x in enumerate(draws) for y in draws[i + 1:]]
-                sims = [s for s in sims if s is not None]
-                if sims:
-                    res["look_noise"] = round(1.0 - min(sims), 3)
+            # The same holds for the saved file: in CI its drawings were seen to differ while the original's two
+            # agreed. So both sides are drawn the same way (a second time, and a third when the first two differ),
+            # the wobble is the farthest pair on either side, and the look is the closest original/saved pair.
+            def drawn(first, path, tag):
+                ds, noise = [first], 0.0
+                for n in (2, 3):
+                    if n == 3 and noise == 0:
+                        break
+                    p = to_pdf(path, t / f"{tag}{n}")
+                    if not p:
+                        break
+                    ds.append(pages(p, t, f"{tag}{n}"))
+                    sims = [s for s in (page_similarity(x, y) for i, x in enumerate(ds) for y in ds[i + 1:]) if s is not None]
+                    if sims:
+                        noise = round(1.0 - min(sims), 3)
+                return ds, noise
+            oa, na = drawn(ia, src, "a")
+            ob, nb = drawn(ib, out, "b")
+            res["look_noise"] = max(na, nb)
             if res["look"] is not None:
-                looks = [page_similarity(d, ib) for d in draws]
-                res["look"] = max(x for x in looks if x is not None)
+                looks = [s for s in (page_similarity(x, y) for x in oa for y in ob) if s is not None]
+                res["look"] = max(looks) if looks else res["look"]
     return res
 
 
