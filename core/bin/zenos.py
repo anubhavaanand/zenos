@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import serialization
 for _lib in ("/usr/lib/zenos", "/usr/local/lib/zenos"):   # the ZENOS library: installed, else development layout
     if os.path.isdir(_lib) and _lib not in sys.path:
         sys.path.append(_lib)
-from zformat import MAGIC, FOLDERS, LABEL, REQUIRED, request_core, request_digest  # noqa: E402
+from zformat import MAGIC, FOLDERS, LABEL, REQUIRED, request_core, request_digest, machine_id  # noqa: E402
 
 H = Path.home()
 Z = H / ".local/share/zenos"                     # per-user data
@@ -614,7 +614,7 @@ def cmd_plan():
     if rc != 0:
         return
     lvl = int(lv)
-    r = new_request("plan", lvl, max(1, REQUIRED[lvl]), reason,
+    r = new_request("plan", lvl, max(1, REQUIRED[lvl]), reason, machine=machine_id(),   # signed with the rest: this PC only
                     scope={"rule": rule, "max_files": int(n), "minutes": GRANT_MINUTES})
     audit("plan-request", request=r["id"], rule=rule, level=lvl, max_files=int(n))
     kd("--title", "ZENOS · Request sent", "--msgbox",

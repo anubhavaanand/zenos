@@ -432,7 +432,9 @@ def plan_allows(rule, level, n=1):
             minutes = float(sc.get("minutes", 0))
             created = datetime.strptime(str(core["created"]), "%Y-%m-%dT%H:%M:%S%z").timestamp()
             ends = min(float(g["expires"]), u["first"] + minutes * 60, created + PLAN_WAIT + minutes * 60)
-            if (sc.get("rule") != rule or core.get("requester") != USER or level > core.get("level", 0)
+            here = Z.machine_id()
+            if (not here or core.get("machine") != here                 # approved for this PC, not copied from another
+                    or sc.get("rule") != rule or core.get("requester") != USER or level > core.get("level", 0)
                     or time.time() > ends or u["used"] + n > sc.get("max_files", 0)):
                 use.setdefault(key, u)
                 continue

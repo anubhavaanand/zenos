@@ -275,8 +275,34 @@ class OfficerSigning(unittest.TestCase):
         r, sigs = sign(typed="no\n")
         self.assertEqual((r.returncode != 0, sigs), (True, []))
         r, sigs = sign(typed=zsupply.sha256_file(str(other))[:8] + "\n")
+        self.assertEqual((r.returncode != 0, sigs), (True, []))          # eight characters can be matched by trying files
+        r, sigs = sign(typed=zsupply.sha256_file(str(other))[:16] + "\n")
         self.assertEqual((r.returncode, len(sigs)), (0, 1))
         r, sigs = sign("--deb", str(other))
+        self.assertEqual((r.returncode, len(sigs)), (0, 1))
+
+    def test_a_mitigation_is_shown_and_bound_by_its_digest(self):
+        import subprocess
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+        tmp = Path(tempfile.mkdtemp(prefix="zenos-sign-"))
+        key = tmp / "ito.key"
+        key.write_bytes(Ed25519PrivateKey.generate().private_bytes(serialization.Encoding.Raw,
+                        serialization.PrivateFormat.Raw, serialization.NoEncryption()))
+        rec = tmp / "m.json"
+        tool = str(REPO / "system" / "sbin" / "zenos_release.py")
+        m = {"manifest": {"kind": "zenos-mitigation", "id": "t", "cves": ["CVE-2026-1001"],
+                          "action": {"kind": "sysctl", "settings": {"kernel.randomize_va_space": "0"}}}}
+        def sign(typed):
+            rec.write_text(json.dumps(m))
+            r = subprocess.run([sys.executable, tool, "sign", str(rec), "--key", str(key), "--by", "ito"],
+                               input=typed, capture_output=True, text=True)
+            return r, json.loads(rec.read_text()).get("sigs", [])
+        r, sigs = sign("\n")
+        self.assertEqual((r.returncode != 0, sigs), (True, []))            # an empty line signs nothing
+        self.assertIn("kernel.randomize_va_space", r.stdout)                # the action is shown
+        self.assertIn("CVE-2026-1001", r.stdout)
+        r, sigs = sign(zsupply.record_digest(m)[:16] + "\n")
         self.assertEqual((r.returncode, len(sigs)), (0, 1))
 
 

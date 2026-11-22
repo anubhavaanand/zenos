@@ -38,6 +38,14 @@ MAX_BATCH = 2000
 MAX_BODY = 32 * 1024 * 1024
 BODY_TIMEOUT = 30
 BODY_SLOTS = threading.BoundedSemaphore(8)    # batches read into memory at once; more wait for the sender's retry
+BODY_DEADLINE = 60                            # seconds for a whole body, however slowly it trickles in
+PROOF_SKEW = 120
+PROOF_SEEN, PROOF_LOCK = {}, threading.Lock()
+
+
+def proof_text(machine, t, nonce, n):
+    """what a PC signs to be let in before its batch is read (zenos_auditship.post)"""
+    return f"zenos-batch {machine} {int(t)} {nonce} {int(n)}".encode()
 
 
 def post_gate(node, headers):
@@ -54,6 +62,28 @@ def post_gate(node, headers):
         return 400, "bad length"
     if n <= 0 or n > MAX_BODY:
         return 413, "too large"
+    # the machine's key, not just its name: a signature over the name, the time, a fresh nonce and the length
+    parts = str(headers.get("X-Zenos-Proof") or "").split(" ")
+    if len(parts) != 3 or not re.match(r"^[0-9]{1,12}$", parts[0]) or not re.match(r"^[A-Za-z0-9_-]{16,64}$", parts[1]):
+        return 403, "sign the request (X-Zenos-Proof)"
+    t, nonce, sig = int(parts[0]), parts[1], parts[2]
+    now = time.time()
+    if abs(now - t) > PROOF_SKEW:
+        return 403, "proof too old"
+    try:
+        good = zident.verify((node.dir / "machines" / f"{machine}.pub").read_bytes(), base64.b64decode(sig),
+                             proof_text(machine, t, nonce, n))
+    except Exception:
+        good = False
+    if not good:
+        return 403, "proof does not verify"
+    with PROOF_LOCK:
+        for k, v in list(PROOF_SEEN.items()):
+            if now - v > 2 * PROOF_SKEW:
+                del PROOF_SEEN[k]
+        if (machine, nonce) in PROOF_SEEN:
+            return 403, "proof used before"
+        PROOF_SEEN[(machine, nonce)] = now
     return 0, ""
 lock = threading.Lock()
 status_lock = threading.Lock()        # heartbeats never wait behind another PC's chain work
@@ -574,8 +604,16 @@ def serve(node, host, port, cert=None, key=None, silence=90, peers=(), check_eve
                 return self.reply(503, {"ok": False, "error": "busy, send again shortly"})
             try:
                 n = int(self.headers.get("Content-Length") or 0)
+                end, parts, got = time.time() + BODY_DEADLINE, [], 0
+                while got < n:                  # the whole body within BODY_DEADLINE, not each read within the timeout
+                    if time.time() > end:
+                        return self.reply(408, {"ok": False, "error": "too slow"})
+                    c = self.rfile.read1(min(65536, n - got)) if hasattr(self.rfile, "read1") else self.rfile.read(min(65536, n - got))
+                    if not c:
+                        break
+                    parts.append(c); got += len(c)
                 try:
-                    b = json.loads(self.rfile.read(n))
+                    b = json.loads(b"".join(parts))
                 except Exception:
                     return self.reply(400, {"ok": False, "error": "not JSON"})
             finally:

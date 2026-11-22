@@ -319,6 +319,35 @@ def cgroup_hold(recs, level):
             pass
 
 
+# the network sentinel says when the open-time cut is in place, and for which accounts (zenos_netsentinel.py)
+CUT_STATE = Path(os.environ.get("ZENOS_OPEN_CUT", "/run/zenos/open-cut.json"))
+SENTINEL_UNITS = [u for u in os.environ.get("ZENOS_SENTINEL_UNIT", "/lib/systemd/system/zenos-netsentinel.service:"
+                                            "/usr/lib/systemd/system/zenos-netsentinel.service:"
+                                            "/etc/systemd/system/zenos-netsentinel.service").split(":") if u]
+CUT_WAIT = float(os.environ.get("ZENOS_CUT_WAIT", "3"))
+
+
+def cut_confirmed(uid, since=None, wait=None):
+    """L4+ plaintext leaves keyd only once the sentinel reports the cut on for this account, after the holder was
+    recorded. Without the sentinel installed (a development layout) there is nothing to wait for."""
+    if not any(os.path.exists(u) for u in SENTINEL_UNITS):
+        return True
+    since = time.time() if since is None else since
+    end = time.time() + (CUT_WAIT if wait is None else wait)
+    while True:
+        try:
+            st = os.stat(CUT_STATE)
+            if st.st_uid == 0 and not (st.st_mode & 0o022):
+                c = json.loads(CUT_STATE.read_text())
+                if c.get("on") and float(c.get("t", 0)) >= since and uid in c.get("uids", []):
+                    return True
+        except (OSError, ValueError, TypeError):
+            pass
+        if time.time() >= end:
+            return False
+        time.sleep(0.05)
+
+
 def hold(pid, uid, level, ino=None):
     """note the processes that now hold plaintext of `level` (the sentinel cuts the network from L4 while any of
     them, or anything they start, lives): every process holding our connection's client end, and the connector.
@@ -434,6 +463,10 @@ def handle(msg, uid, pid=0, ino=None):
         if not hold(pid, uid, level, ino):
             log(event="unseal-refused", user=user, level=level, name=h.get("name"), sha256=fh[:16], reason="no-holder")
             return {"ok": False, "error": "holder", "message": "The program that asked is gone; the file stays closed."}
+        if level >= 4 and not cut_confirmed(uid):
+            data = None
+            log(event="unseal-refused", user=user, level=level, name=h.get("name"), sha256=fh[:16], reason="no-netcut")
+            return {"ok": False, "error": "netcut", "message": "The network could not be cut for this file, so it stays closed. Try again; if it keeps happening, tell your administrator."}
         log(event="unseal", user=user, level=level, by=how, name=h.get("name"), sha256=fh[:16],
             **({"fid": fid} if fid else {}))
         return {"ok": True, "header": h, "data": base64.b64encode(data).decode()}

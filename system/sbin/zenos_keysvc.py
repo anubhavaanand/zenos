@@ -30,7 +30,7 @@ recorded opening means the PC's record was suppressed.
   zenos_keysvc.py --store DIR --passkey USER FILE.json    a passkey registered for USER (zwebauthn.register output)
   zenos_keysvc.py --store DIR --audit-store DIR --reconcile
 """
-import base64, hashlib, json, os, re, secrets, ssl, sys, threading, time
+import base64, collections, hashlib, json, os, re, secrets, ssl, sys, threading, time
 from urllib.parse import urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -42,12 +42,14 @@ import zdecide, zident, zkeysvc, zledger, zwebauthn                          # n
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey   # noqa: E402
 from cryptography.hazmat.primitives import serialization          # noqa: E402
 
-NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+NAME = re.compile(r"^(?!\.\.?$)[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")   # never "." or "..", never a path
 PAGES = Path(os.environ.get("ZENOS_KEYSVC_PAGES",
                             os.path.join(os.path.dirname(os.path.realpath(__file__)), "keysvc-pages")))
 FID = re.compile(r"^[0-9a-f]{32}$")
 CHALLENGE_TTL = 120
 MAX_CHALLENGES = 50          # open challenges per PC
+NONCE_LEN = 128              # a request's nonce: 16 to 128 characters
+NONCE_MAX = 5000             # requests one PC may make within the replay window (4 x SKEW)
 RATES_SWEEP = 4096          # past this many counted keys, ones with nothing inside the window are dropped
 SEALED_WINDOW = 600          # seconds after the key is issued within which the PC names the finished file
 
@@ -136,7 +138,7 @@ class Service:
         (self.dir / "enrol").mkdir(exist_ok=True)
         self.key = Ed25519PrivateKey.from_private_bytes(self._secret(self.dir / "service.key"))
         self.lock = threading.Lock()
-        self.nonces, self.rates, self.challenges = {}, {}, {}
+        self.nonces, self.nonce_order, self.rates, self.challenges = {}, {}, {}, {}
         self.ledger = str(self.dir / "releases.jsonl")
 
     @staticmethod
@@ -289,17 +291,20 @@ class Service:
             sig_ok = False
         now = time.time()
         fresh = False
+        nonce = str(req.get("nonce", ""))
+        try:
+            ok_t = abs(now - float(req.get("t"))) <= zkeysvc.SKEW
+        except (TypeError, ValueError):
+            ok_t = False
+        # replay memory: per PC, in arrival order, so expiry looks only at the oldest entries; a PC that sends more
+        # than NONCE_MAX requests within the window is refused until they age out, and no one else waits on it
         with self.lock:
-            for n, t in list(self.nonces.items()):
-                if now - t > 4 * zkeysvc.SKEW:
-                    del self.nonces[n]
-            nonce = str(req.get("nonce", ""))
-            try:
-                ok_t = abs(now - float(req.get("t"))) <= zkeysvc.SKEW
-            except (TypeError, ValueError):
-                ok_t = False
-            if sig_ok and ok_t and len(nonce) >= 16 and (req["machine"], nonce) not in self.nonces:
-                self.nonces[(req["machine"], nonce)] = now
+            q = self.nonce_order.setdefault(req["machine"], collections.deque())
+            seen = self.nonces.setdefault(req["machine"], set())
+            while q and now - q[0][0] > 4 * zkeysvc.SKEW:
+                seen.discard(q.popleft()[1])
+            if (sig_ok and ok_t and 16 <= len(nonce) <= NONCE_LEN and nonce not in seen and len(q) < NONCE_MAX):
+                q.append((now, nonce)); seen.add(nonce)
                 fresh = True
         return req, True, sig_ok, fresh
 

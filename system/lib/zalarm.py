@@ -19,6 +19,45 @@ LEDGER = os.path.join(Z, "ledger.jsonl")
 SIREN = os.path.join(zconf.SBIN, "zenos_siren.py")
 
 
+def as_desk_user(fn):
+    """Run fn() with the desk user's rights. Z is that user's own folder: when a root service raises an alert, the files
+    there are written by a child that has become the user, so a link the user planted (to a root file) or a recipient
+    name that climbs out of the folder can only reach what the user could write anyway."""
+    if os.geteuid() != 0:
+        return fn()
+    import pwd
+    try:
+        pw = pwd.getpwnam(zconf.user())
+    except KeyError:
+        return None
+    if pw.pw_uid == 0:
+        return None
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            os.setgroups([]); os.setgid(pw.pw_gid); os.setuid(pw.pw_uid)
+            fn(); code = 0
+        except BaseException:
+            pass
+        finally:
+            os._exit(code)
+    t = time.time()
+    while time.time() - t < 10:
+        done, _ = os.waitpid(pid, os.WNOHANG)
+        if done:
+            return True
+        time.sleep(0.05)
+    try:
+        os.kill(pid, 9); os.waitpid(pid, 0)
+    except OSError:
+        pass
+    return None
+
+
+SAFE_ID = __import__("re").compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
 def _alive(pid):
     try:
         os.kill(pid, 0); return True
@@ -27,10 +66,11 @@ def _alive(pid):
 
 
 def _ensure_siren(text):
-    os.makedirs(Z, exist_ok=True)
-    with open(STATE, "w") as f:
-        json.dump({"text": text, "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")}, f)
-    zconf.give_to_user(STATE)
+    def write():
+        os.makedirs(Z, exist_ok=True)
+        with open(STATE, "w") as f:
+            json.dump({"text": text, "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")}, f)
+    as_desk_user(write)
     try:
         if os.path.exists(PID) and _alive(int(open(PID).read().strip())):
             return                                   # already ringing; message refreshed via STATE
@@ -113,17 +153,20 @@ def _desk_uid():
 def dispatch(title, text, reasons):
     """Fan the alert out to every pre-registered senior's device (PoC: per-recipient outbox + ledger)."""
     sent = []
-    recs = _recipients()
-    for r in recs:
-        try:
-            d = os.path.join(INBOX, r["id"]); os.makedirs(d, exist_ok=True)
-            fn = os.path.join(d, time.strftime("%Y%m%d-%H%M%S") + ".json")
-            json.dump({"to": r, "title": title, "text": text, "reasons": reasons,
-                       "severity": "red", "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")},
-                      open(fn, "w"), ensure_ascii=False)
-            sent.append(r["id"])
-        except Exception:
-            pass
+    recs = [r for r in _recipients() if isinstance(r, dict) and SAFE_ID.match(str(r.get("id", "")))]
+
+    def write_outbox():
+        for r in recs:
+            try:
+                d = os.path.join(INBOX, r["id"]); os.makedirs(d, exist_ok=True)
+                fn = os.path.join(d, time.strftime("%Y%m%d-%H%M%S") + ".json")
+                with open(fn, "w") as f:
+                    json.dump({"to": r, "title": title, "text": text, "reasons": reasons,
+                               "severity": "red", "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z")}, f, ensure_ascii=False)
+            except Exception:
+                pass
+    if recs and as_desk_user(write_outbox):
+        sent += [r["id"] for r in recs]
     key = _msg_key()
     port = _msg_port()
     try:
@@ -148,12 +191,12 @@ def dispatch(title, text, reasons):
             sent.append("owner-phone-push")
     except Exception:
         pass
-    try:
+    def write_ledger():
         import zledger
         dev = __import__("hashlib").sha256(b"node-A").hexdigest()[:16]
         zledger.append(LEDGER, "red-dispatch", "alarm", dev, recipients=sent, reasons=reasons, text=text)
-        zconf.give_to_user(LEDGER)
-        zconf.give_to_user(LEDGER + ".lock")
+    try:
+        as_desk_user(write_ledger)
     except Exception:
         pass
     return sent

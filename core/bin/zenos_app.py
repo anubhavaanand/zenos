@@ -113,7 +113,9 @@ class App(Gtk.Window):
         ucm.add_script(WebKit2.UserScript.new(
             "window.__zinit=%s;(function(){var n=0,p={};window.__zr=function(i,r){var f=p[i];delete p[i];if(f)f(r);};"
             "window.zenos={init:window.__zinit,call:function(c,a){return new Promise(function(res){var i=++n;p[i]=res;"
-            "window.webkit.messageHandlers.zenos.postMessage(JSON.stringify({id:i,cmd:c,args:a||{}}));});}};})();" % json.dumps(init),
+            "window.webkit.messageHandlers.zenos.postMessage(JSON.stringify({id:i,cmd:c,args:a||{}}));});}};"
+            # a file dropped on the window is handed to the page (window.__zdrop), never opened as the window's page
+            "for(var t of ['dragover','drop'])document.addEventListener(t,function(e){e.preventDefault();},false);})();" % json.dumps(init),
             WebKit2.UserContentInjectedFrames.TOP_FRAME, WebKit2.UserScriptInjectionTime.START, None, None))
         if SEALED >= 3:     # nothing is copied out of an L3+ sealed picture, video or PDF (same rule as the office apps)
             ucm.add_script(WebKit2.UserScript.new(
@@ -180,9 +182,14 @@ class App(Gtk.Window):
         return True
 
     def on_decide(self, web, decision, dtype):
+        # the window shows its own page and nothing else: not another local file (which would have the same file
+        # access as the app), not a web page, not a new window
+        if dtype == WebKit2.PolicyDecisionType.NEW_WINDOW_ACTION:
+            decision.ignore()
+            return True
         if dtype == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
-            uri = decision.get_navigation_action().get_request().get_uri() or ""
-            if not uri.startswith("file:") and not uri.startswith("about:"):
+            uri = (decision.get_navigation_action().get_request().get_uri() or "").split("#", 1)[0].split("?", 1)[0]
+            if uri not in (GLib.filename_to_uri(os.path.abspath(html), None), "about:blank"):
                 decision.ignore()
                 return True
         return False

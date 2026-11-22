@@ -534,11 +534,46 @@ def holders_alive(path=OPEN_HOLDERS, min_level=4):
     return bool(live) or bool(cgroup_holders(min_level))
 
 
+CUT_STATE = os.environ.get("ZENOS_OPEN_CUT", "/run/zenos/open-cut.json")   # read by zenos_keyd.py before it hands over L4+
+
+
+def holder_uids(path=OPEN_HOLDERS, min_level=4):
+    """the accounts of live L4+ holders (keyd's records; their children and cgroup members run as the same account)"""
+    out = set()
+    try:
+        recs = json.load(open(path))
+    except Exception:
+        recs = []
+    for h in recs if isinstance(recs, list) else []:
+        if isinstance(h, dict) and int(h.get("level", 0)) >= min_level:
+            st = _proc_stat(h.get("pid", 0))
+            if st and st[1] == h.get("start") and isinstance(h.get("uid"), int):
+                out.add(h["uid"])
+    for p in cgroup_holders(min_level):
+        try:
+            out.add(os.stat(f"/proc/{p}").st_uid)
+        except OSError:
+            pass
+    return out
+
+
+def _write_cut_state(on, uids):
+    try:
+        os.makedirs(os.path.dirname(CUT_STATE), exist_ok=True)
+        tmp = CUT_STATE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"on": bool(on), "t": time.time(), "uids": sorted(uids)}, f)
+        os.chmod(tmp, 0o644); os.replace(tmp, CUT_STATE)
+    except OSError:
+        pass
+
+
 def open_flag_watch():
     if zconf.SBIN not in sys.path:
         sys.path.insert(0, zconf.SBIN)
     import zenos_openguard as zopenguard
-    cut = False
+    cut, cut_uids = False, set()
+    _write_cut_state(False, ())
     while True:
         want = False
         try:
@@ -554,13 +589,18 @@ def open_flag_watch():
             want = want or holders_alive(min_level=zopenguard.MIN_LEVEL)
         except Exception:
             want = True                              # unsure: keep the network cut
-        if want and not cut:
-            zopenguard._cut_on(); cut = True
-            log({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "type": "open-netcut", "state": "on"})
+        try:
+            uids = holder_uids(min_level=zopenguard.MIN_LEVEL) if want else set()
+        except Exception:
+            uids = set()
+        if want and (not cut or uids != cut_uids):
+            zopenguard._cut_on(uids); cut, cut_uids = True, uids
+            log({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "type": "open-netcut", "state": "on", "uids": sorted(uids)})
         elif not want and cut:
-            zopenguard._cut_off(); cut = False
+            zopenguard._cut_off(); cut, cut_uids = False, set()
             log({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "type": "open-netcut", "state": "off"})
-        time.sleep(0.3)
+        _write_cut_state(cut, cut_uids)
+        time.sleep(0.1)
 
 
 def main():

@@ -139,13 +139,17 @@ def read_records(p):
         return [json.loads(l) for l in f if l.strip()]
 
 
-def post(url, body):
+def post(url, body, key=None):
     u = urlparse(url)
     if u.scheme != "https" and u.hostname not in ("127.0.0.1", "localhost", "::1"):
         raise ValueError("audit nodes must be reached over https")
-    req = urllib.request.Request(url.rstrip("/") + "/v1/batch", data=json.dumps(body, ensure_ascii=False).encode(),
-                                 headers={"Content-Type": "application/json",
-                                          "X-Zenos-Machine": str(body.get("machine", ""))}, method="POST")
+    data = json.dumps(body, ensure_ascii=False).encode()
+    hdr = {"Content-Type": "application/json", "X-Zenos-Machine": str(body.get("machine", ""))}
+    if key is not None:     # the node reads a batch only after this proof of the machine's key (zenos_auditnode.post_gate)
+        t, nonce = int(time.time()), base64.urlsafe_b64encode(os.urandom(18)).decode().rstrip("=")
+        text = f"zenos-batch {hdr['X-Zenos-Machine']} {t} {nonce} {len(data)}".encode()
+        hdr["X-Zenos-Proof"] = f"{t} {nonce} {base64.b64encode(key.sign(text)).decode()}"
+    req = urllib.request.Request(url.rstrip("/") + "/v1/batch", data=data, headers=hdr, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=20, context=ssl.create_default_context() if u.scheme == "https" else None) as r:
             return r.status, json.loads(r.read())
@@ -176,7 +180,7 @@ def ship_once(c, key, state):
                     b["status"] = now
                 sign(key, b)
                 try:
-                    code, ans = post(node["url"], b)
+                    code, ans = post(node["url"], b, key)
                 except Exception as e:
                     once(("down", node["url"]), 3600, event="audit-node-unreachable", node=node.get("name"), error=str(e)[:120])
                     return

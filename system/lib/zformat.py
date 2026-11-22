@@ -10,7 +10,16 @@ LABEL = {1: "Public", 2: "Confidentiality 2", 3: "Confidentiality 3",
          4: "Important Economic Security Information", 5: "Specially Designated Secret"}
 # approvals a level needs
 REQUIRED = {1: 0, 2: 1, 3: 1, 4: 2, 5: 3}
-CORE_KEYS = ("id", "kind", "requester", "file", "file_hash", "level", "reason", "created", "scope")
+CORE_KEYS = ("id", "kind", "requester", "file", "file_hash", "level", "reason", "created", "scope", "machine")
+
+
+def machine_id():
+    """this PC, as officers' signatures on a pre-filed plan name it (the first 32 hex digits of /etc/machine-id)"""
+    try:
+        m = open(os.environ.get("ZENOS_MACHINE_ID_FILE", "/etc/machine-id")).read().strip()[:32]
+        return m if m and all(c in "0123456789abcdef" for c in m) else ""
+    except OSError:
+        return ""
 
 
 def request_core(r):

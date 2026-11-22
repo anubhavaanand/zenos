@@ -219,6 +219,32 @@ class DataStore(unittest.TestCase):
             self.db.get(rid, "tanaka", self.tanaka, "casework")
         self.assertIn("rate", str(e.exception))
 
+    def test_rate_limit_holds_under_concurrent_requests(self):
+        """ten requests at once, with a decision that takes time, still release no more than rate_max"""
+        import threading, zdecide
+        from unittest import mock
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        c = dict(self.conf, rate_max=2)
+        self.write_conf(self.keys[0], c)
+        rid = self.db.put("cases", {"x": 12}, 1)
+        rec = next(self.db.fetch(rid))
+        def body():
+            core = zdata.request_core("cases", rid, "cases", 1, "tanaka", "casework", zdata.raw(X25519PrivateKey.generate().public_key()))
+            return {"request": core, "sig": zdata.b64(self.server_key.sign(zdata.canon(core))), "proof": self.tanaka,
+                    "x": rec["shares"][0]["x"], "sealed": rec["shares"][0]["sealed"]}
+        real = zdecide.ask
+        def slow(f):
+            time.sleep(0.2)
+            return real(f)
+        bodies, codes, go = [body() for _ in range(10)], [], threading.Barrier(10)
+        def one(b):
+            go.wait(); codes.append(self.keys[0].share(b)[0])
+        with mock.patch.object(zdecide, "ask", slow):
+            ts = [threading.Thread(target=one, args=(b,)) for b in bodies]
+            for t in ts: t.start()
+            for t in ts: t.join()
+        self.assertEqual(codes.count(200), 2, codes)
+
     def test_without_an_audit_setting_every_request_is_refused(self):
         rid = self.db.put("cases", {"x": 10}, 1)
         c = {k: v for k, v in self.conf.items() if k != "audit"}

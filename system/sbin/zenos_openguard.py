@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """ZENOS open-time network cut for high-secrecy files (PoC).
 
-While an L4+ file is decrypted and on screen, NEW outbound connections are blocked, so the plaintext
-cannot be shipped out during its one exposed window. Loopback (the desktop/app) and already-established
-connections (the operator's live Guacamole session) are exempt, so the screen stays up. Keys are
+While an L4+ file is decrypted and on screen, NEW outbound connections are blocked, and the account holding the
+plaintext sends nothing at all (not even on connections it opened before), so the plaintext cannot be shipped out
+during its one exposed window. Loopback (the desktop/app) and other accounts' established connections (the
+operator's live Guacamole session) are exempt, so the screen stays up. Keys are
 fetched BEFORE the cut; on close the file is re-sealed and the network is restored. Every step is
 written to the tamper-evident ledger.
 """
@@ -22,11 +23,15 @@ def sh(*a):
     return subprocess.run(a, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
-def _cut_on():
+def _cut_on(uids=()):
+    """uids: the accounts of the processes holding the plaintext. Their packets are dropped even on connections they
+    opened before the cut; the exemption for established connections is for the others (the operator's session)."""
     if sh("iptables", "-nL", CHAIN).returncode != 0:
         sh("iptables", "-N", CHAIN)
     sh("iptables", "-F", CHAIN)
     sh("iptables", "-A", CHAIN, "-o", "lo", "-j", "RETURN")
+    for u in sorted({int(x) for x in uids}):
+        sh("iptables", "-A", CHAIN, "-m", "owner", "--uid-owner", str(u), "-j", "DROP")
     sh("iptables", "-A", CHAIN, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "RETURN")
     sh("iptables", "-A", CHAIN, "-j", "DROP")
     if sh("iptables", "-C", "OUTPUT", "-j", CHAIN).returncode != 0:

@@ -298,7 +298,12 @@ class AuditShipping(unittest.TestCase):
         cls.node.enroll("pc-test", pub)
         (d / "audit.json").write_text(json.dumps({"machine": "pc-test", "ledgers": {"guard": cls.ledger},
                                                   "nodes": [{"name": "n", "url": "http://127.0.0.1:1", "pub": cls.node.pub_b64()}]}))
-        cls.S.post = lambda url, body: cls.node.accept(json.loads(json.dumps(body)))   # the node, without the network
+        cls.real_post = cls.S.post
+        cls.S.post = lambda url, body, key=None: cls.node.accept(json.loads(json.dumps(body)))   # the node, without the network
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.S.post = cls.real_post
 
     def ship(self):
         self.S.ship_once(self.S.conf(), self.key, self.state)

@@ -65,6 +65,12 @@ def describe(rec):
     if k != "release":
         sys.exit("Not a release or revocation record.")
     m = rec["manifest"]
+    if m.get("kind") == "zenos-mitigation":                 # a change made as root on every PC: shown in full
+        return "\n".join([f"MITIGATION {m.get('id')}",
+                          f"        for {', '.join(map(str, m.get('cves') or [])) or '-'}",
+                          f"        action {json.dumps(m.get('action'), sort_keys=True, ensure_ascii=False)}"])
+    if not m.get("sha256"):
+        sys.exit("Not a record this command can show in full; it is not signed.")
     rings = ", ".join(f"ring {r} from {time.strftime('%Y-%m-%d %H:%M', time.localtime(int(t))) if int(t) else 'now'}"
                       for r, t in sorted((m.get("rings") or {}).items()))
     lines = [f"RELEASE {m.get('kind')}  {m.get('name')} {m.get('version')} {m.get('arch', '')}",
@@ -155,9 +161,15 @@ def main():
             if not same_package(mine, rec.get("manifest")):
                 sys.exit("Not signed: the record does not describe your copy of the package.")
         else:
-            want = record_sha(rec)[:8]
+            # what is typed binds the whole record: the package's SHA-256, or for a record without one (a mitigation)
+            # the digest of everything that would be signed. Sixteen characters: too many to match by trying files.
+            what, full = ("SHA-256", record_sha(rec)) if record_sha(rec) else ("record digest", zsupply.record_digest(rec))
+            want = str(full).lower()[:16]
+            if len(want) < 16:
+                sys.exit("Not signed: the record has no digest to confirm.")
+            print(f"        {what} {full}")
             try:
-                got = input(f"Type the first 8 characters of the SHA-256 to sign it (anything else stops): ")
+                got = input(f"Type the first 16 characters of the {what} to sign it (anything else stops): ")
             except EOFError:
                 got = ""
             if got.strip().lower() != want:

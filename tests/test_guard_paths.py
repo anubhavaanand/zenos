@@ -145,12 +145,15 @@ class GuardPaths(unittest.TestCase):
             self.assertFalse(G.plan_allows("usb-export", 5))               # L5 needs 3 distinct officers
 
     def test_plan_use_is_counted_by_the_guard(self):
+        from unittest import mock
         G.SYSD = self.d / "sys"
         G.PLAN_USE = G.SYSD / "plan-use.json"
         G.DATA = self.d / "data"
         (G.DATA / "plans").mkdir(parents=True)
         G.USER = "tester"
-        core = {"id": "r1", "kind": "plan", "requester": "tester", "level": 2, "reason": "x",
+        here = G.Z.machine_id() or "0" * 32
+        self.enterContext(mock.patch.object(G.Z, "machine_id", lambda: here))
+        core = {"id": "r1", "kind": "plan", "requester": "tester", "level": 2, "reason": "x", "machine": here,
                 "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "scope": {"rule": "usb-export", "max_files": 1, "minutes": 5}}
         import base64, hashlib
         digest = hashlib.sha256(json.dumps(core, sort_keys=True, ensure_ascii=False).encode()).digest()
@@ -164,6 +167,26 @@ class GuardPaths(unittest.TestCase):
         (G.DATA / "plans" / "r1.json").write_text(json.dumps(g))
         self.assertFalse(G.plan_allows("usb-export", 2))                      # the guard's own count stands
         self.assertEqual(json.loads((G.DATA / "plans" / "r1.json").read_text())["used"], 0)   # never written as root
+
+    def test_a_plan_is_for_the_pc_it_was_approved_for(self):
+        from unittest import mock
+        import base64, hashlib
+        G.SYSD = self.d / "sys3"; G.PLAN_USE = G.SYSD / "plan-use.json"; G.DATA = self.d / "data3"
+        (G.DATA / "plans").mkdir(parents=True); G.USER = "tester"
+        self.enterContext(mock.patch.object(G.zapprove, "check", lambda *a: (True, "", {})))
+        def plan(rid, **extra):
+            core = {"id": rid, "kind": "plan", "requester": "tester", "level": 2, "reason": "x", **extra,
+                    "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "scope": {"rule": "usb-export", "max_files": 1, "minutes": 5}}
+            digest = hashlib.sha256(json.dumps(core, sort_keys=True, ensure_ascii=False).encode()).digest()
+            (G.DATA / "plans" / f"{rid}.json").write_text(json.dumps({"request": rid, "expires": time.time() + 999, "core": core,
+                "digest": base64.b64encode(digest).decode(), "approvals": [{"approver": "a"}, {"approver": "b"}]}))
+        with mock.patch.object(G.Z, "machine_id", lambda: "a" * 32):
+            plan("other", machine="b" * 32)
+            self.assertFalse(G.plan_allows("usb-export", 2))                  # approved for another PC
+            plan("none")
+            self.assertFalse(G.plan_allows("usb-export", 2))                  # names no PC
+            plan("mine", machine="a" * 32)
+            self.assertTrue(G.plan_allows("usb-export", 2))
 
 
 class DeskLevel(unittest.TestCase):

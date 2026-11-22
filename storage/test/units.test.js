@@ -193,3 +193,35 @@ test('a node that claims shards it does not hold cannot stop repair', async () =
   assert.deepEqual(r.missing.sort(), [3, 4])
   assert.deepEqual(r.rebuilt.map(x => x.index).sort(), [3, 4])
 })
+
+test('a holder that leads the repair but never repairs is passed over after a grace period', async () => {
+  const crypto = require('crypto')
+  process.env.ZENOS_STORE_REPAIR_GRACE_MS = '200'
+  delete require.cache[require.resolve('../lib/repair')]
+  const { repairFile } = require('../lib/repair')
+  const sha = s => crypto.createHash('sha256').update(s).digest('hex')
+  const node = (label, zone) => {
+    const held = new Map()
+    return { label, zone, role: 'node', clearance: 'L5', publicKey: crypto.randomBytes(32).toString('hex'), held,
+      request: async (h, b) => {
+        if (h.op === 'list_shards') return { header: { indices: [...held.keys()] } }
+        if (h.op === 'get_shard') { if (!held.has(h.index)) throw new Error('no'); return { header: {}, body: held.get(h.index) } }
+        if (h.op === 'put_shard') { held.set(h.index, b); return { header: {} } }
+        if (h.op === 'put_manifest') return { header: {} }
+        throw new Error('op')
+      } }
+  }
+  const { manifestBuf, shards } = seal(Buffer.from('payload'), { k: 3, n: 5, level: 'L2', name: 'x' })
+  const fileId = JSON.parse(manifestBuf).fileId
+  const nodes = ['a', 'b', 'c', 'd', 'e'].map((l, i) => node(l, 'z' + i))
+  shards.forEach((s, i) => nodes[i].held.set(i, s))
+  nodes[4].held.clear()                                    // one shard lost
+  const holding = nodes.slice(0, 4).sort((x, y) => (sha(fileId + x.publicKey) < sha(fileId + y.publicKey) ? -1 : 1))
+  const second = holding[1]                                // the leader, holding[0], never runs repair
+  assert.equal(await repairFile(manifestBuf, nodes, { self: second }), null)          // the leader's turn first
+  await new Promise(r => setTimeout(r, 250))
+  const r = await repairFile(manifestBuf, nodes, { self: second })                    // the leader did nothing
+  assert.deepEqual(r.rebuilt.map(x => x.index), [4])
+  assert.equal(await repairFile(manifestBuf, nodes, { self: holding[2] }), null)      // whole again: nothing to do
+  delete process.env.ZENOS_STORE_REPAIR_GRACE_MS
+})

@@ -33,6 +33,8 @@ const distrusted = new Map() // publicKey -> until (ms)
 const SPOT_CHECKS = 2 // indices per file per pass whose every claimed holder must hand over the matching shard
 const distrust = p => distrusted.set(p.publicKey, Date.now() + 3600e3)
 const isDistrusted = p => (distrusted.get(p.publicKey) || 0) > Date.now()
+const incompleteSince = new Map() // fileId -> when this node first saw it short of shards
+const LEADER_GRACE_MS = Number(process.env.ZENOS_STORE_REPAIR_GRACE_MS || 15 * 60e3)
 
 async function survey (fileId, peers) {
   const holders = new Map() // index -> [peer]
@@ -82,8 +84,16 @@ async function repairFile (manifestBuf, peers, { log: rawLog = () => {}, self = 
   }
   const alive = peers.filter(p => perPeer.get(p.publicKey) !== null)
   if (self) {
+    // The first holder in rank leads. A leader that answers but does not repair must not keep a file short for
+    // ever: while the file stays incomplete, the holder ranked k-th takes over after k grace periods.
     const holding = alive.filter(p => perPeer.get(p.publicKey).size > 0)
-    if (holding.length && !isLeader(m.fileId, self, holding)) return null
+    const complete = [...Array(m.n).keys()].every(i => holders.has(i))
+    if (complete) incompleteSince.delete(m.fileId)
+    else if (!incompleteSince.has(m.fileId)) incompleteSince.set(m.fileId, Date.now())
+    const pos = rank(m.fileId, holding).findIndex(p => p.publicKey === self.publicKey)
+    const waited = Date.now() - (incompleteSince.get(m.fileId) || Date.now())
+    if (holding.length && pos !== 0 && (complete || pos < 0 || waited < pos * LEADER_GRACE_MS)) return null
+    if (pos > 0) log(`the first ${pos} holder(s) in rank did not repair within ${pos} grace period(s): repairing here`)
   }
 
   const load = p => (perPeer.get(p.publicKey) || new Set()).size

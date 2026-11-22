@@ -196,6 +196,55 @@ class KeydHolders(unittest.TestCase):
             del os.environ["ZENOS_OPEN_HOLDERS"]
 
 
+class CutBeforePlaintext(unittest.TestCase):
+    """L4+ plaintext leaves keyd only after the network sentinel reports the open-time cut on for the holder's account,
+    and the cut drops that account's packets on connections it opened before"""
+    def test_keyd_waits_for_the_cut(self):
+        import importlib
+        with tempfile.TemporaryDirectory() as d:
+            unit = os.path.join(d, "zenos-netsentinel.service"); open(unit, "w").close()
+            cut = os.path.join(d, "open-cut.json")
+            os.environ.update(ZENOS_SENTINEL_UNIT=unit, ZENOS_OPEN_CUT=cut)
+            try:
+                import zenos_keyd as K
+                importlib.reload(K)
+                t0 = time.time()
+                self.assertFalse(K.cut_confirmed(1000, since=t0, wait=0.2))           # no word from the sentinel
+                def say(on, uids, t):
+                    with open(cut, "w") as f:
+                        json.dump({"on": on, "t": t, "uids": uids}, f)
+                    os.chmod(cut, 0o644)
+                say(True, [1000], t0 - 5)
+                self.assertFalse(K.cut_confirmed(1000, since=t0, wait=0.2))           # an old report does not count
+                say(True, [1001], t0 + 1)
+                self.assertFalse(K.cut_confirmed(1000, since=t0, wait=0.2))           # another account's cut
+                say(False, [1000], t0 + 1)
+                self.assertFalse(K.cut_confirmed(1000, since=t0, wait=0.2))
+                say(True, [1000], t0 + 1)
+                if os.geteuid() == 0:
+                    self.assertTrue(K.cut_confirmed(1000, since=t0, wait=0.2))
+                    os.chmod(cut, 0o666)
+                    self.assertFalse(K.cut_confirmed(1000, since=t0, wait=0.2))       # a file anyone could write
+                os.remove(unit)
+                self.assertTrue(K.cut_confirmed(1000, since=t0, wait=0.2))            # no sentinel installed (development)
+            finally:
+                for k in ("ZENOS_SENTINEL_UNIT", "ZENOS_OPEN_CUT"):
+                    os.environ.pop(k, None)
+
+    def test_the_cut_drops_the_holders_established_connections(self):
+        import zenos_openguard as og
+        from unittest import mock
+        calls = []
+        with mock.patch.object(og, "sh", lambda *a: calls.append(a) or mock.Mock(returncode=0)):
+            og._cut_on({1000})
+        rules = [c for c in calls if c[:3] == ("iptables", "-A", og.CHAIN)]
+        owner = next(i for i, c in enumerate(rules) if "--uid-owner" in c)
+        est = next(i for i, c in enumerate(rules) if "ESTABLISHED,RELATED" in c)
+        self.assertEqual(rules[owner][-2:], ("-j", "DROP"))
+        self.assertIn("1000", rules[owner])
+        self.assertLess(owner, est)                     # before the exemption for established connections
+
+
 class AuditNodeIntake(unittest.TestCase):
     """only an enrolled machine can make the audit node read a batch into memory, and the batch must be that
     machine's; anyone else is turned away from the headers alone"""
@@ -212,7 +261,17 @@ class AuditNodeIntake(unittest.TestCase):
             self.assertEqual(g({"X-Zenos-Machine": "../x", "Content-Length": "100"}), 403)
             self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": str(an.MAX_BODY + 1)}), 413)
             self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": "x"}), 400)
-            self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": "100"}), 0)
+            self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": "100"}), 403)     # the name alone: not let in
+            def proof(n=100, t=None, nonce=None, key=k):
+                t = int(time.time()) if t is None else t; nonce = nonce or base64.urlsafe_b64encode(os.urandom(18)).decode()
+                return f"{t} {nonce} " + base64.b64encode(key.sign(an.proof_text("pc-1", t, nonce, n))).decode()
+            ok = proof()
+            self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": "100", "X-Zenos-Proof": ok}), 0)
+            self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": "100", "X-Zenos-Proof": ok}), 403)   # once only
+            self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": "200", "X-Zenos-Proof": proof()}), 403)  # another length
+            self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": "100", "X-Zenos-Proof": proof(t=int(time.time()) - 3600)}), 403)
+            self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": "100",
+                                "X-Zenos-Proof": proof(key=Ed25519PrivateKey.generate())}), 403)                 # not this machine's key
 
     def test_over_http(self):
         import socket, threading, urllib.request, urllib.error
@@ -243,6 +302,9 @@ class AuditNodeIntake(unittest.TestCase):
             other = json.dumps({"machine": "pc-9", "chain": "guard", "from": 0, "records": []}).encode()
             self.assertEqual(post({"X-Zenos-Machine": "pc-1"}, other), 403)     # named one machine, sent another's
             self.assertEqual(post({"X-Zenos-Machine": "pc-1"}, body), 403)      # its own, but unsigned
+            # the shipper's own request carries the proof and is read and judged on the batch's signature
+            code, ans = ship.post("http://127.0.0.1:%d" % port, json.loads(body), k)
+            self.assertEqual((code, ans.get("error")), (403, "signature does not verify"))
 
 
 class OpenHolders(unittest.TestCase):
@@ -310,6 +372,68 @@ class HolderCgroups(unittest.TestCase):
             finally:
                 p.kill(); p.wait()
             self.assertFalse(ns.holders_alive(empty))              # gone: nothing holds
+
+
+class AlarmWritesAsUser(unittest.TestCase):
+    """a red alert raised by a root service writes the desk user's files as that user: a link the user planted in their
+    own folder, or a recipient name that climbs out of it, reaches nothing the user could not write anyway"""
+    @unittest.skipUnless(os.geteuid() == 0, "needs root, as the services that raise red alerts")
+    def test_planted_links_reach_nothing_of_roots(self):
+        import importlib, pwd, zalarm, zconf
+        from unittest import mock
+        nobody = pwd.getpwnam("nobody")
+        with tempfile.TemporaryDirectory() as d:
+            os.chmod(d, 0o755)
+            z = os.path.join(d, "z"); os.mkdir(z); os.chown(z, nobody.pw_uid, nobody.pw_gid)
+            victim = os.path.join(d, "root-file"); open(victim, "w").write("root data\n"); os.chmod(victim, 0o644)
+            os.symlink(victim, os.path.join(z, "redalert.json"))
+            os.symlink(victim, os.path.join(z, "ledger.jsonl.lock"))
+            with open(os.path.join(z, "alert-recipients.json"), "w") as f:
+                json.dump([{"id": "a"}, {"id": "../../escape"}, {"id": d}], f)
+            os.chown(os.path.join(z, "alert-recipients.json"), nobody.pw_uid, nobody.pw_gid)
+            with mock.patch.object(zconf, "user", lambda: "nobody"), \
+                 mock.patch.multiple(zalarm, Z=z, STATE=os.path.join(z, "redalert.json"), RECIPIENTS=os.path.join(z, "alert-recipients.json"),
+                                     INBOX=os.path.join(z, "alerts-outbox"), LEDGER=os.path.join(z, "ledger.jsonl")), \
+                 mock.patch.object(zalarm.subprocess, "Popen", lambda *a, **k: None), \
+                 mock.patch.object(zalarm, "_msg_port", lambda: None):
+                zalarm._ensure_siren("test")
+                sent = zalarm.dispatch("t", "t", ["r"])
+            self.assertEqual(open(victim).read(), "root data\n")             # neither overwritten nor truncated
+            self.assertEqual(sent, ["a"])                                      # names that leave the folder are skipped
+            self.assertFalse(os.path.exists(os.path.join(d, "escape")))
+            self.assertTrue(os.listdir(os.path.join(z, "alerts-outbox", "a")))
+            self.assertFalse(any(n.endswith(".json") for n in os.listdir(d) if n != "z"))
+
+
+class AppWindowShowsOnlyItsPage(unittest.TestCase):
+    """an app window (PDF, Video, Images) never becomes another local file or a web page: a dropped .html file
+    would otherwise get the app's file access and its bridge"""
+    def test_navigation_policy(self):
+        import importlib.util, types
+        from unittest import mock
+        class _T:          # stand-ins for the GTK and WebKit names the policy uses
+            pass
+        WebKit2 = types.SimpleNamespace(PolicyDecisionType=types.SimpleNamespace(NAVIGATION_ACTION=1, NEW_WINDOW_ACTION=2, RESPONSE=3))
+        GLib = types.SimpleNamespace(filename_to_uri=lambda p, _h: "file://" + p, filename_from_uri=lambda u: (u[7:], None))
+        repo = types.SimpleNamespace(Gtk=types.SimpleNamespace(Window=_T), WebKit2=WebKit2, Gdk=types.SimpleNamespace(), GLib=GLib)
+        gi = types.SimpleNamespace(require_version=lambda *a: None, repository=repo)
+        app_html = "/usr/share/zenos/apps/pdf/index.html"
+        mods = {"gi": gi, "gi.repository": repo, "zenos_cloud": types.ModuleType("zenos_cloud"), "zenos_picker": types.ModuleType("zenos_picker")}
+        with mock.patch.dict(sys.modules, mods), mock.patch.object(sys, "argv", ["x", app_html, "PDF", "i.svg", "800x600"]):
+            spec = importlib.util.spec_from_file_location("zenos_app_t", os.path.join(HERE, "..", "core", "bin", "zenos_app.py"))
+            app = importlib.util.module_from_spec(spec); spec.loader.exec_module(app)
+        class D:
+            def __init__(self, uri): self.uri, self.ignored = uri, False
+            def get_navigation_action(self): return types.SimpleNamespace(get_request=lambda: types.SimpleNamespace(get_uri=lambda: self.uri))
+            def ignore(self): self.ignored = True
+        def go(uri, t=1):
+            d = D(uri); app.App.on_decide(None, None, d, t); return not d.ignored
+        self.assertTrue(go("file://" + app_html))
+        self.assertTrue(go("file://" + app_html + "#page=2"))
+        self.assertFalse(go("file:///home/u/Downloads/x.html"))         # a dropped or linked local page
+        self.assertFalse(go("file:///usr/share/zenos/apps/video/index.html"))
+        self.assertFalse(go("https://example.com/"))
+        self.assertFalse(go("file://" + app_html, t=2))                 # no new windows
 
 
 class DropList(unittest.TestCase):

@@ -42,7 +42,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey  
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey   # noqa: E402
 
 RID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
-NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+NAME = re.compile(r"^(?!\.\.?$)[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")   # never "." or "..", never a path
 MAX_RECORD = 8 * 1024 * 1024
 DEFAULT_QUOTA_BYTES = 20 << 30          # per server, unless conf.json gives "quota_bytes" for it
 DEFAULT_QUOTA_RECORDS = 5_000_000
@@ -186,6 +186,15 @@ class Peer:
             # decision or any state (only a counter, written to the ledger at most once a minute)
             self._refused_quietly("share")
             return 403, {"ok": False, "reason": "server"}
+        # counting, deciding and recording one server's releases are done one request at a time, so concurrent
+        # requests cannot all be decided on the same count (the rate limits bound a taken-over server)
+        with self.lock:
+            locks = self.__dict__.setdefault("server_locks", {})
+            slock = locks.setdefault(server, threading.Lock())
+        with slock:
+            return self._share_decided(c, b, core, s, sig_ok, enrolled, server, rid, table, level, person, purpose, proof, x, sealed, eph)
+
+    def _share_decided(self, c, b, core, s, sig_ok, enrolled, server, rid, table, level, person, purpose, proof, x, sealed, eph):
         window = float(c.get("window", 60))
         facts = {"op": "share", "enrolled": enrolled, "sig_ok": sig_ok,
                  "fresh": bool(sig_ok and self._fresh(c, server, core.get("t", 0), str(core.get("nonce", "")))),

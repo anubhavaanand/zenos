@@ -253,6 +253,28 @@ class KeyService(unittest.TestCase):
         body["req"]["machine"] = "pc-unknown"
         self.assertEqual(self.svc.handle("open", body)[1]["error"], "machine")
 
+    def test_replay_memory_is_bounded_per_pc(self):
+        """one PC's flood of signed requests fills only its own replay memory, and is refused past its bound"""
+        key = zkeysvc.identity_key()
+        def body(n, machine=MACHINE, k=key):
+            req = {"op": "sealed", "machine": machine, "t": int(time.time()), "nonce": n}
+            return {"req": req, "sig": zkeysvc.b64(k.sign(zkeysvc.canon(req)))}
+        old = zenos_keysvc.NONCE_MAX
+        try:
+            zenos_keysvc.NONCE_MAX = 50
+            self.svc.nonces.clear(); self.svc.nonce_order.clear()          # the service is shared by the tests above
+            fresh = [self.svc.verify(body("n%015d" % i))[3] for i in range(60)]
+            self.assertEqual(fresh.count(True), 50)                          # past the bound: not fresh, refused
+            self.assertFalse(self.svc.verify(body("x" * 129))[3])            # an over-long nonce
+            other = Ed25519PrivateKey.generate()
+            self.svc.enroll("pc-two", base64.b64encode(raw_pub(other)).decode())
+            self.assertTrue(self.svc.verify(body("n%015d" % 1, "pc-two", other))[3])   # another PC is not held up
+            self.assertEqual(len(self.svc.nonces[MACHINE]), 50)
+        finally:
+            zenos_keysvc.NONCE_MAX = old
+        self.assertIsNone(zenos_keysvc.NAME.match(".."))
+        self.assertIsNone(zenos_keysvc.NAME.match("."))
+
     def test_only_users_assigned_to_this_pc(self):
         """root on this PC naming a user who works elsewhere gets nothing, even for a file it holds"""
         self.svc.set_clearance("elsewhere", 5)
