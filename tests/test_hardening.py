@@ -203,6 +203,7 @@ class OpenHolders(unittest.TestCase):
         import subprocess, importlib
         with tempfile.TemporaryDirectory() as d:
             os.environ["HOME"] = d
+            os.environ["ZENOS_OPEN_KIDS"] = os.path.join(d, "kids.json")
             import zenos_netsentinel as ns
             importlib.reload(ns)
             path = os.path.join(d, "holders.json")
@@ -218,6 +219,8 @@ class OpenHolders(unittest.TestCase):
             self.assertEqual(len(json.load(open(path))), 1)              # the file is keyd's alone
             parent.wait()
             self.assertTrue(ns.holders_alive(path))                      # the holder exited, its child still holds
+            importlib.reload(ns)                                         # the sentinel is restarted in between:
+            self.assertTrue(ns.holders_alive(path))                      # the child it followed still holds
             for k in kids:
                 os.kill(k["pid"], 9)
             time.sleep(0.3)
@@ -248,6 +251,42 @@ class DropList(unittest.TestCase):
         self.assertFalse(ns.system_check(4242, "198.51.100.7", 443, "apt"))
         self.assertFalse(ns.system_check(4242, "192.0.2.1", 443, "firefox"))   # anything else: not this rule
 
+
+class RawSockets(unittest.TestCase):
+    """a socket that writes below the packet filter (AF_PACKET, AF_XDP) is frozen unless a listed network program
+    holds a packet socket; an XDP socket is never allowed"""
+    def test_who_may_hold_one(self):
+        import importlib
+        import zenos_netsentinel as ns
+        importlib.reload(ns)
+        exe = {10: "/usr/sbin/NetworkManager", 11: "/usr/bin/python3.13", 12: "/usr/sbin/wpa_supplicant",
+               13: "/usr/sbin/NetworkManager"}.get
+        owners = {10: {1}, 11: {2}, 12: {3}, 13: {4}}
+        bad = ns.raw_offenders({1, 2, 3}, {4}, owners, exe)
+        self.assertEqual(sorted(bad), [(11, "packet"), (13, "xdp")])   # python's packet socket; any XDP socket
+        self.assertEqual(ns.raw_offenders(set(), set(), {}, exe), [])
+        self.assertEqual(ns.packet_inodes("sk RefCnt Type Proto Iface R Rmem User Inode\n"
+                                          "ffff 3 3 88cc 2 1 0 0 41234\n"), {41234})
+
+    def test_a_packet_socket_opened_here_is_found(self):
+        import importlib, socket
+        import zenos_netsentinel as ns
+        importlib.reload(ns)
+        try:
+            s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
+        except (PermissionError, OSError, AttributeError):
+            self.skipTest("no CAP_NET_RAW here")
+        try:
+            with open("/proc/net/packet") as f:
+                pk = ns.packet_inodes(f.read())
+            ino = os.fstat(s.fileno()).st_ino
+            self.assertIn(ino, pk)
+            owners = ns.socket_owners({ino})
+            self.assertIn(os.getpid(), owners)
+            bad = ns.raw_offenders(pk, set(), {os.getpid(): owners[os.getpid()]}, lambda p: sys.executable)
+            self.assertEqual(bad, [(os.getpid(), "packet")])
+        finally:
+            s.close()
 
 if __name__ == "__main__":
     unittest.main()

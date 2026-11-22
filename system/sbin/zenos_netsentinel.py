@@ -236,6 +236,102 @@ def firewall_watch():
         time.sleep(0.2)
 
 
+# ---------------- sockets that go around the packet filter ----------------
+# The sentinel and the firewall work in the kernel's IP output path. A packet socket (AF_PACKET) writes whole frames
+# to the network card below that path, and an XDP socket (AF_XDP, the route DPDK-style programs take) hands frames
+# to the card directly: nothing they send passes ZENOS_OUT. Only root, or a process given CAP_NET_RAW, can open one;
+# on ZENOS that is the network programs below, which use packet sockets for DHCP and Wi-Fi sign-in. Any other
+# holder, and any XDP socket at all, is frozen at once and handed to the agent like an egress incident.
+RAW_OK_EXE = ("/usr/sbin/NetworkManager", "/usr/lib/NetworkManager/", "/usr/libexec/NetworkManager/",
+              "/usr/sbin/dhclient", "/sbin/dhclient", "/usr/sbin/dhcpcd", "/usr/sbin/wpa_supplicant",
+              "/usr/sbin/iwd", "/usr/libexec/iwd", "/usr/lib/systemd/systemd-networkd", "/lib/systemd/systemd-networkd")
+
+
+def packet_inodes(text):
+    """socket inodes from /proc/net/packet (its last column)"""
+    out = set()
+    for line in text.splitlines()[1:]:
+        f = line.split()
+        if f and f[-1].isdigit():
+            out.add(int(f[-1]))
+    return out
+
+
+def xdp_inodes():
+    """socket inodes of AF_XDP sockets, from the kernel's socket diagnostics (ss); empty when ss cannot tell"""
+    try:
+        r = subprocess.run(["ss", "-H", "-n", "-e", "--xdp"], capture_output=True, text=True, timeout=5)
+    except Exception:
+        return set()
+    out = set()
+    for tok in r.stdout.replace(",", " ").split():
+        if tok.startswith("ino:") and tok[4:].isdigit():
+            out.add(int(tok[4:]))
+    return out
+
+
+def socket_owners(inodes):
+    """pid -> socket inodes it holds, for the given inodes"""
+    want = {"socket:[%d]" % i: i for i in inodes}
+    owners = defaultdict(set)
+    if not want:
+        return owners
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            for fd in os.listdir("/proc/%s/fd" % d):
+                try:
+                    t = os.readlink("/proc/%s/fd/%s" % (d, fd))
+                except OSError:
+                    continue
+                if t in want:
+                    owners[int(d)].add(want[t])
+        except OSError:
+            continue
+    return owners
+
+
+def raw_offenders(packet, xdp, owners, exe_of):
+    """[(pid, kind)] to freeze: XDP sockets always, packet sockets unless held by a listed network program"""
+    bad = []
+    for pid, socks in owners.items():
+        if socks & xdp:
+            bad.append((pid, "xdp"))
+        elif socks & packet:
+            exe = exe_of(pid) or ""
+            if not any(exe == x or (x.endswith("/") and exe.startswith(x)) for x in RAW_OK_EXE):
+                bad.append((pid, "packet"))
+    return bad
+
+
+def raw_socket_watch(period=1.0):
+    me = os.getpid()
+    seen = set()
+    while True:
+        try:
+            pk = packet_inodes(open("/proc/net/packet").read())
+        except OSError:
+            pk = set()
+        xd = xdp_inodes()
+        owners = socket_owners(pk | xd)
+        owners.pop(me, None)
+        for pid, kind in raw_offenders(pk, xd, owners, lambda p: proc_info(p).get("exe")):
+            try:
+                os.kill(pid, signal.SIGSTOP)
+            except Exception:
+                pass
+            key = (pid, kind, tuple(sorted(owners[pid])))
+            if key in seen:
+                continue
+            seen.add(key)
+            inc = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "type": "raw-socket", "socket": kind,
+                   "proc": proc_info(pid), "reflex": ["freeze-proc"]}
+            log(inc)
+            threading.Thread(target=agent, args=(inc,), daemon=True).start()
+        time.sleep(period)
+
+
 # ---------------- agent layer (judgement, after containment) ----------------
 PROMPT = ("You are the ZENOS response agent. A deterministic reflex has ALREADY contained the incident below. "
           "Choose the next step. You may only tighten, never loosen. Allowed actions: "
@@ -267,6 +363,8 @@ def local_policy(inc):
         return "escalate", "The firewall was removed from outside: restored it, and calling staff on the assumption of an intrusion", "local"
     if inc["type"] == "egress" and not trusted:
         return "terminate", "A program outside ZENOS sent large amounts of data to an unapproved destination, so it was stopped", "local"
+    if inc["type"] == "raw-socket":
+        return "terminate", "A program opened a socket that writes to the network card below the packet filter, so it was stopped", "local"
     if inc["type"] == "listener":
         return "keep_contained", "Closed a listener open to the outside. Waiting for staff to judge whether it is legitimate", "local"
     return "keep_contained", "A ZENOS program: kept stopped until staff decide", "local"
@@ -324,7 +422,48 @@ def _proc_stat(pid):
         return None
 
 
-_KIDS = {}          # descendants of holders found so far (pid -> start time), kept here: the file is keyd's alone
+KIDS_FILE = os.environ.get("ZENOS_OPEN_KIDS", "/run/zenos/open-kids.json")
+
+
+def _load_kids(path=KIDS_FILE):
+    """descendants followed before a restart of the sentinel: a holder that handed its plaintext to a child and
+    exited must not free the network because the sentinel was restarted in between. Kept only while the same
+    process (pid and start time) is still alive, and only from a file that root owns and no one else can write."""
+    try:
+        st = os.lstat(path)
+        import stat as _st
+        if not _st.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
+            if os.geteuid() == 0:
+                return {}
+        recs = json.load(open(path))
+    except Exception:
+        return {}
+    out = {}
+    for pid, start in (recs.items() if isinstance(recs, dict) else []):
+        try:
+            pid = int(pid)
+        except ValueError:
+            continue
+        cur = _proc_stat(pid)
+        if cur and cur[1] == start:
+            out[pid] = start
+    return out
+
+
+def _save_kids(kids, path=KIDS_FILE):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({str(k): v for k, v in kids.items()}, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+_KIDS = _load_kids()  # descendants of holders found so far (pid -> start time), kept in memory and in KIDS_FILE
+                      # (root's, for restarts); the holders file is keyd's alone
 
 
 def holders_alive(path=OPEN_HOLDERS, min_level=4):
@@ -342,24 +481,26 @@ def holders_alive(path=OPEN_HOLDERS, min_level=4):
         st = _proc_stat(h.get("pid", 0))
         if st and st[1] == h.get("start") and int(h.get("level", 0)) >= min_level:
             live[int(h["pid"])] = st[1]
+    before = dict(_KIDS)
     for pid, start in list(_KIDS.items()):
         st = _proc_stat(pid)
         if st and st[1] == start:
             live[pid] = start
         else:
             _KIDS.pop(pid, None)
-    if not live:
-        return False
-    grown = True
-    while grown:                                   # descendants of a holder hold it too
-        grown = False
-        for d in os.listdir("/proc"):
-            if d.isdigit() and int(d) not in live:
-                st = _proc_stat(d)
-                if st and st[0] in live:
-                    live[int(d)] = _KIDS[int(d)] = st[1]
-                    grown = True
-    return True
+    if live:
+        grown = True
+        while grown:                               # descendants of a holder hold it too
+            grown = False
+            for d in os.listdir("/proc"):
+                if d.isdigit() and int(d) not in live:
+                    st = _proc_stat(d)
+                    if st and st[0] in live:
+                        live[int(d)] = _KIDS[int(d)] = st[1]
+                        grown = True
+    if _KIDS != before:
+        _save_kids(_KIDS)
+    return bool(live)
 
 
 def open_flag_watch():
@@ -397,6 +538,7 @@ def main():
     threading.Thread(target=_heartbeat, daemon=True).start()
     threading.Thread(target=open_flag_watch, daemon=True).start()
     threading.Thread(target=resolve_loop, daemon=True).start()
+    threading.Thread(target=raw_socket_watch, daemon=True).start()
     me = os.getpid()
     bt = subprocess.Popen(["bpftrace", "-B", "line", BT], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                           text=True)
