@@ -59,6 +59,15 @@ let fail = 0; const check = (name, cond, got) => { console.log((cond ? "ok   " :
   const added = r[0] === 200;
   r = await rq(T, "tanaka", "POST", "/channels", { id: "raise-room", name: "#r", level: 4, by: "tanaka" });
   check("a channel cannot be raised above a member's clearance", added && r[0] === 403, r);
+  // one-time prekeys: only a registered device may fetch a bundle, and each may use up only so many per hour
+  const P = S.IdentityKeyPair.generate(), pre = Array.from({ length: 40 }, (_, i) => ({ id: i + 1, pub: "k" + i }));
+  await rq(null, "pk", "POST", "/keys/pk", { name: "pk", identity: b64(P.publicKey.serialize()), preKeys: pre });
+  r = await rq(null, "x", "GET", "/keys/pk"); check("an unsigned bundle fetch is refused", r[0] === 403, r);
+  r = await rq(T, "tanaka", "GET", "/keys/pk"); check("a signed fetch gets a one-time prekey", r[0] === 200 && r[1].preKey && r[1].preKey.id === 1, r);
+  for (let i = 1; i < 30; i++) r = await rq(T, "tanaka", "GET", "/keys/pk");
+  const last = r; r = await rq(T, "tanaka", "GET", "/keys/pk");
+  check("past the hourly budget, the bundle comes without a one-time prekey", last[1].preKey && r[0] === 200 && r[1].preKey === null && r[1].identity, r);
+  r = await rq(M, "mallory", "GET", "/keys/pk"); check("another account still gets the next prekey", r[0] === 200 && r[1].preKey && r[1].preKey.id === 31, r);
   // a relay that registers new accounts only with an administrator's enrollment code
   const port2 = PORT + 1, R2 = `http://127.0.0.1:${port2}`, HOME2 = fs.mkdtempSync(path.join(os.tmpdir(), "zbind-"));
   const relay2 = spawn(process.execPath, [path.join(MSG, "relay.js")], { env: { ...process.env, HOME: HOME2, ZENOS_RELAY_DIRECTORY: path.join(__dirname, "fixtures", "msg-directory.json"), ZENOS_RELAY_PORT: String(port2), ZENOS_RELAY_ENROLL: "1" }, stdio: "ignore" });

@@ -7,7 +7,7 @@
 // (zkeystore.js), and the sessions go on after they are restored.
 // Build first: cd messenger/wasm && wasm-pack build --release --target web --out-dir pkg-web
 //   node tests/messenger_wasm_browser.js
-const path = require("path"), os = require("os"), fs = require("fs"), http = require("http"), { spawn } = require("child_process");
+const path = require("path"), os = require("os"), fs = require("fs"), http = require("http"), crypto = require("crypto"), { spawn } = require("child_process");
 const pw = require("playwright"), ENGINE = process.env.ENGINE || "chromium";   // chromium, webkit (Safari's engine), firefox
 const MSG = path.join(__dirname, "..", "messenger"), PKG = path.join(MSG, "wasm", "pkg-web"), WEB = path.join(MSG, "wasm", "web");
 const SIGN = path.join(__dirname, "..", "tools", "sign_wasm_release.js"), { execFileSync } = require("child_process");
@@ -57,7 +57,9 @@ const j = async (p, method = "GET", obj) => (await fetch(R + p, { method, header
     await j("/keys/" + name, "POST", { ...JSON.parse(bj), name, level: 1 });
     certs[name] = (await j("/cert", "POST", { acc: name, identity: JSON.parse(bj).identity })).cert;
   }
-  const bobBundle = JSON.stringify(await j("/keys/bob"));
+  // fetching a bundle takes a signed request from a registered device: alice signs it in the browser
+  const kts = String(Date.now()), ksig = await pg.evaluate((t) => a.sign(t), `GET /keys/bob ${kts} ${crypto.createHash("sha256").update("").digest("hex")}`);
+  const bobBundle = JSON.stringify(await (await fetch(R + "/keys/bob", { headers: { "X-Zenos-Auth": `alice ${kts} ${ksig}` } })).json());
   const res = await pg.evaluate(([bb, trust, certs]) => {
     const n = Date.now(); a.start_session("bob", bb, n);
     const m1 = JSON.parse(b.open(trust, a.seal("bob", certs.alice, "hello from the first browser device", n), n));

@@ -66,7 +66,7 @@ async function relayRequest(me, url, method, p, obj) {
 
 /**
  * The relay's federation endpoints. ctx: { DIR, audit, send, body, isAdmin, authed, deliverSealed(mbx, uak, body) ->
- * {status, body}, bundleFor(acc) -> bundle|null, trust }
+ * {status, body}, bundleFor(acc, by) -> bundle|null, trust }
  */
 function federation(ctx) {
   const F = path.join(ctx.DIR, "federation.json");     // { org, url, max_level }   set by the relay's administrator
@@ -193,7 +193,7 @@ function federation(ctx) {
     if (req.method === "GET" && parts[0] === "fed" && parts[1] === "bundle" && parts.length === 3) {
       const d = inbound(req, "", "keys", 1);
       if (!d.allow) return send(res, 403, { error: "Not allowed: " + d.reason }), true;
-      const b = ctx.bundleFor(decodeURIComponent(parts[2]));
+      const b = ctx.bundleFor(decodeURIComponent(parts[2]), "org:" + d.from);   // one budget per organization
       if (!b) return send(res, 404, { error: "unknown account" }), true;
       ctx.audit("fed-bundle-given", { from_org: d.from });
       // only what a Signal session needs, and the name and level shown to the other side (no phone, no settings)

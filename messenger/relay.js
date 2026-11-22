@@ -178,10 +178,20 @@ function deliverSealed(mbx, uak, b64body) {
   audit("msg-sealed-delivered", { mailbox: mbx.slice(0, 8), bytes: Buffer.from(b64body, "base64").length });
   return { status: 200, body: { ok: true } };
 }
-function bundleFor(acc) {                    // a key bundle for a new session; the one-time prekey is used up
+// One-time prekeys are few (a device publishes 20). Each signed-in account may use up at most TAKE_MAX of them per
+// hour; past that it still gets the bundle, without a one-time prekey (a session then starts from the signed and
+// Kyber prekeys alone), so no one can empty another account's prekeys by asking again and again.
+const TAKE_MAX = 30, TAKES = new Map();
+function mayTake(by) {
+  const now = Date.now(), t = (TAKES.get(by) || []).filter((x) => now - x < 3600e3);
+  if (t.length >= TAKE_MAX) { TAKES.set(by, t); return false; }
+  t.push(now); TAKES.set(by, t); return true;
+}
+function bundleFor(acc, by) {                // a key bundle for a new session; the one-time prekey is used up
   const b = bundles[acc];
   if (!b) return null;
-  const out = { ...b, preKey: (b.preKeys || []).shift() || null };
+  const take = mayTake(by || "?");
+  const out = { ...b, preKey: take ? ((b.preKeys || []).shift() || null) : null };
   delete out.preKeys; delete out.enroll;
   save();
   return out;
@@ -351,7 +361,9 @@ http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
     if (req.method === "GET" && parts[0] === "keys") {           // fetch a bundle (one-time prekey is used up)
-      const out = bundleFor(parts[1]);
+      const by = String(req.headers["x-zenos-auth"] || "").split(" ")[0];
+      if (!authed(req, by)) return refuse(res, by, "keys");       // only a registered device, signing as itself
+      const out = bundleFor(parts[1], by);
       return out ? send(res, 200, out) : send(res, 404, { error: "unknown account" });
     }
     if (req.method === "GET" && parts[0] === "accounts") {

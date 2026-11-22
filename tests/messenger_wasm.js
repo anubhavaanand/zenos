@@ -42,7 +42,9 @@ const j = async (p, method = "GET", obj, h = {}) => { const r = await fetch(R + 
   await j("/mailbox", "POST", { id: bIntro.id, owner: sha(bIntro.tok), uak: null });
 
   // PC -> browser
-  const b = await j("/keys/bob");
+  // fetching a bundle takes a signed request from a registered device (here alice, the PC side)
+  const kts = String(Date.now()), ksig = b64(st.idkp.privateKey.sign(Buffer.from(`GET /keys/bob ${kts} ${sha("")}`)));
+  const b = await (await fetch(R + "/keys/bob", { headers: { "X-Zenos-Auth": `alice ${kts} ${ksig}` } })).json();
   await S.processPreKeyBundle(S.PreKeyBundle.new(b.regId, 1, b.preKey.id, S.PublicKey.deserialize(ub(b.preKey.pub)), b.signed.id, S.PublicKey.deserialize(ub(b.signed.pub)),
     ub(b.signed.sig), S.PublicKey.deserialize(ub(b.identity)), b.kyber.id, S.KEMPublicKey.deserialize(ub(b.kyber.pub)), ub(b.kyber.sig)),
     S.ProtocolAddress.new("bob", 1), S.ProtocolAddress.new("alice", 1), sess, ident);
