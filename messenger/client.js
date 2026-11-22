@@ -439,6 +439,7 @@ async function ingest(fromAcc, m) {
 // ---------- linked phones (remote port) + Web Push ----------
 const crypto = require("crypto");
 const webpush = require("web-push");
+const { pushSub } = require("./pushsub");
 const QR = require("qrcode");
 const DEVF = path.join(DIR, "devices.json");
 let devices = load(DEVF, {});
@@ -454,6 +455,7 @@ async function pushTo(keys, payload, opt) {
   opt = opt || {}; let sent = 0;
   for (const k of keys) {
     const d = devices[k]; if (!d || !d.push) continue;
+    if (!pushSub(d.push)) { d.push = null; saveDev(); continue; }
     try { await webpush.sendNotification(d.push, JSON.stringify(payload), { TTL: opt.ttl || 3600, urgency: opt.urgency || "normal" }); sent++; }
     catch (err) {
       if (err.statusCode === 404 || err.statusCode === 410) { d.push = null; saveDev(); }
@@ -1015,7 +1017,9 @@ async function handle(req, res, remote) {
     if (u.pathname === "/api/push/key") return json(res, 200, { key: vapid.publicKey });
     if (u.pathname === "/api/push/subscribe" && req.method === "POST") {
       if (!remote) return json(res, 200, { error: "Use a linked phone for push." });
-      const { sub } = await readBody(req); devices[req.dev].push = sub; saveDev();
+      const sub = pushSub((await readBody(req)).sub);
+      if (!sub) { audit("msg-push-refused", { device: req.dev.slice(0, 12) }); return json(res, 200, { error: "This is not a push address from a phone's browser." }); }
+      devices[req.dev].push = sub; saveDev();
       audit("msg-push-subscribed", { device: req.dev.slice(0, 12) }); return json(res, 200, { ok: true });
     }
     if (u.pathname === "/api/push/test" && req.method === "POST") {

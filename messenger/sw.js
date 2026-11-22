@@ -2,7 +2,7 @@
 // The page itself is fetched fresh first (falls back to cache offline), so a phone always gets the latest screen.
 // Static parts (icons, avatars, call code) are served from cache at once and refreshed in the background.
 // Messages, keys and attachments (/api/*) are never cached.
-const CACHE = "zenos-msg-v13";
+const CACHE = "zenos-msg-v14";
 const SHELL = ["/", "/app-icon.svg", "/app-icon-180.png", "/app-icon-512.png", "/manifest.webmanifest", "/zcall.js", "/zcred.js", "/lk/livekit-client.umd.js", "/lk/livekit-client.e2ee.worker.js"];
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => Promise.all(SHELL.map((u) => c.add(u).catch(() => {})))));
@@ -38,7 +38,8 @@ self.addEventListener("push", (e) => {
 });
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || "/";
+  // a page of this app only, whatever the notification says
+  const u = String((e.notification.data && e.notification.data.url) || "/"), url = /^\/(?![/\\])[^\s]*$/.test(u) ? u : "/";
   e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((cs) => {
     for (const c of cs) if ("focus" in c) return c.focus();
     return self.clients.openWindow(url);
