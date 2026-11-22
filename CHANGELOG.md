@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Weaknesses found while fixing those of self-audit run 3, in the same parts of the code (the messenger and its
+  relay, phone sign-in, calls, push notifications, federation, the key agent and network sentinel, the audit node,
+  the key service and the vulnerability watch), are fixed with tests (22 Nov 2026). What each one was is published
+  with the release that carries them. The key agent's unit no longer sets `ProtectControlGroups=yes`: it puts a
+  process given L4+ plaintext in a cgroup of its own under `/sys/fs/cgroup/zenos-holders`, so the network sentinel
+  sees everything that process starts.
+
 - After GTIG/Mandiant's report on AI-driven intrusion tools (ARTEX and others, 30 Oct 2026): the guard stops the PC
   when survey or directory commands run at machine speed (a stopped PC gets no keys from the key service); services
   where anyone can open a receiving address (webhook.site and the like) are cut for every account; a test goes
