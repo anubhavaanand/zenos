@@ -354,6 +354,27 @@ def check(src, engine, work):
             ia, ib = pages(a, t, "a"), pages(b, t, "b")
             res["pages"] = [len(ia), len(ib)]
             res["look"] = page_similarity(ia, ib)
+            # LibreOffice does not always draw the same file the same way twice (row heights, pictures and
+            # conditional formats can land differently from one run to the next). Draw the original a second time:
+            # how far it is from itself is this file's own noise, and the saved file is compared with the closer
+            # of the two drawings, so the gate refuses real changes and not the drawing's own wobble.
+            # Two drawings can agree by chance, so a file whose two drawings differ at all is drawn a third time and
+            # the wobble is the farthest pair.
+            draws = [ia]
+            for tag in ("a2", "a3"):
+                if tag == "a3" and res.get("look_noise", 0) == 0:
+                    break
+                p = to_pdf(src, t / tag)
+                if not p:
+                    break
+                draws.append(pages(p, t, tag))
+                sims = [page_similarity(x, y) for i, x in enumerate(draws) for y in draws[i + 1:]]
+                sims = [s for s in sims if s is not None]
+                if sims:
+                    res["look_noise"] = round(1.0 - min(sims), 3)
+            if res["look"] is not None:
+                looks = [page_similarity(d, ib) for d in draws]
+                res["look"] = max(x for x in looks if x is not None)
     return res
 
 
@@ -399,7 +420,8 @@ def _one(arg):
 def gate(results, baseline_path):
     """refuse a change that makes any file worse than the recorded baseline: a file that saved no longer saves, an
     element that was kept is no longer kept, the cells or text kept drop, or the pages look less alike (by more than
-    0.02, the noise of drawing). Only files present in both are compared."""
+    0.02, the noise of drawing, plus the file's own measured wobble, look_noise). Only files present in both are
+    compared."""
     base = {(r["file"], r["engine"]): r for r in json.loads(Path(baseline_path).read_text())}
     worse = []
     for r in results:
@@ -414,8 +436,12 @@ def gate(results, baseline_path):
                 y2 = (r.get("features") or {}).get(n, [x, 0])[1]
                 if y2 < x:
                     worse.append(f"{r['file']}: {n} no longer kept ({y2} of {x})")
+        # the look may move by the noise of drawing (0.02) plus whatever this file's own drawing was measured to
+        # wobble, in the baseline or in this run (look_noise: how far the original is from itself drawn twice)
+        noise = max(b.get("look_noise") or 0.0, r.get("look_noise") or 0.0)
         for m in ("text", "look"):
-            if b.get(m) is not None and r.get(m) is not None and r[m] < b[m] - (0.02 if m == "look" else 0.005):
+            tol = (0.02 + noise) if m == "look" else 0.005
+            if b.get(m) is not None and r.get(m) is not None and r[m] < b[m] - tol:
                 worse.append(f"{r['file']}: {m} {b[m]} -> {r[m]}")
     return worse
 
