@@ -23,7 +23,7 @@ jobs:
       image: debian:trixie
       options: --privileged          # bubblewrap needs user namespaces inside the container
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Tools (the same packages ZENOS depends on)
         run: |
           apt-get update
@@ -47,7 +47,7 @@ jobs:
         run: |
           cat /tmp/office-results/results.md >> "$GITHUB_STEP_SUMMARY" || true
           tail -70 /tmp/office-results.log || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: always()
         with:
           name: office-compat-results

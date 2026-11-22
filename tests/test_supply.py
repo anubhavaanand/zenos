@@ -280,5 +280,21 @@ class OfficerSigning(unittest.TestCase):
         self.assertEqual((r.returncode, len(sigs)), (0, 1))
 
 
+
+class PinnedActions(unittest.TestCase):
+    """every action a workflow runs is named by its commit, not by a tag that its owner can move"""
+    def test_every_uses_is_a_commit(self):
+        import glob, re
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".github", "workflows")
+        bad = []
+        for f in sorted(glob.glob(os.path.join(root, "*.yml"))):
+            with open(f, encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+            for n, line in enumerate(lines, 1):
+                m = re.search(r"uses:\s*([^\s#]+)", line)
+                if m and not m.group(1).startswith("./") and not re.search(r"@[0-9a-f]{40}$", m.group(1)):
+                    bad.append("%s:%d %s" % (os.path.basename(f), n, m.group(1)))
+        self.assertEqual(bad, [])
+
 if __name__ == "__main__":
     unittest.main()
