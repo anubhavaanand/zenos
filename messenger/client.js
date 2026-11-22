@@ -135,6 +135,17 @@ async function rq(method, p, obj) { return (await rqr(method, p, obj)).json(); }
 // ---------- first start: make this device's keys and publish the public halves ----------
 // one-time enrollment code from the administrator, for relays that register new accounts only that way
 const enrollCode = () => { try { return process.env.ZENOS_ENROLL_CODE || fs.readFileSync(path.join(MDATA, "enroll-code"), "utf8").trim(); } catch { return undefined; } };
+// one-time prekeys used up by others' new sessions are replaced, so the relay always holds about 20 (relay.js bundleFor)
+function topUpPreKeys() {
+  const ids = Object.keys(st.preKeys).map(Number);
+  let next = Math.max(st.nextPreKey || 21, ...ids.map((i) => i + 1));
+  while (Object.keys(st.preKeys).length < 20) {
+    const k = S.PrivateKey.generate();
+    st.preKeys[next] = b64(S.PreKeyRecord.new(next, k.getPublicKey(), k).serialize());
+    next = next >= 0xfffff0 ? 1 : next + 1;
+  }
+  st.nextPreKey = next; persist();
+}
 async function setup() {
   if (st) await ensureMailboxes();
   if (!st) {
@@ -154,6 +165,7 @@ async function setup() {
     audit("msg-keys-created", { device: ACC });
     await ensureMailboxes();
   }
+  topUpPreKeys();
   const idkp = S.IdentityKeyPair.deserialize(ub(st.idkp));
   const s = S.SignedPreKeyRecord.deserialize(ub(st.signed[1]));
   const k = S.KyberPreKeyRecord.deserialize(ub(st.kyber[1]));
@@ -369,6 +381,7 @@ async function receiveSealed() {
       }
       if (m.rt && /^[0-9a-f]{32}$/.test(m.rt.mbx || "")) { st.peers[from] = { mbx: m.rt.mbx, uak: m.rt.uak }; persist(); }
       if (isRoom(m.ch) && !(await learnRoom(from, m))) { audit("msg-dropped", { reason: "not a member of the room" }); continue; }
+      if (m.ch && !isRoom(m.ch) && !(await channelMember(m.ch, from))) { audit("msg-dropped", { reason: "not a member of the channel" }); continue; }
       await ingest(from, m);
     } catch (err) { audit("msg-decrypt-failed", { from, error: String(err).slice(0, 120) }); }
   }
@@ -384,6 +397,7 @@ async function receive() {
         ? await S.signalDecryptPreKey(S.PreKeySignalMessage.deserialize(buf), addr, LOCAL, sess, ident, pks, spks, kpks)
         : await S.signalDecrypt(S.SignalMessage.deserialize(buf), addr, LOCAL, sess, ident);
       const m = JSON.parse(Buffer.from(pt).toString("utf8"));
+      if (m && typeof m.ch === "string" && (isRoom(m.ch) ? !(await learnRoom(e.from, m)) : !(await channelMember(m.ch, e.from)))) { audit("msg-dropped", { from: e.from, reason: "not a member of the channel" }); continue; }
       await ingest(e.from, m);
     } catch (err) {
       audit("msg-decrypt-failed", { from: e.from, error: String(err).slice(0, 120) });
@@ -399,7 +413,30 @@ function wellFormed(m) {
   if (m.text != null && typeof m.text !== "string") return false;
   if (m.emoji != null && !(typeof m.emoji === "string" && m.emoji.length <= 16 && !/[<>&"'`\\]/.test(m.emoji))) return false;
   for (const k of ["ch", "thread", "id", "target", "t", "status"]) if (m[k] != null && typeof m[k] !== "string") return false;
+  if (m.ev != null) {               // event, call and release details: an object of short strings, attendees a list of names
+    const ev = m.ev;
+    if (typeof ev !== "object" || Array.isArray(ev) || JSON.stringify(ev).length > 65536) return false;
+    for (const k of ["title", "place", "note", "date", "start", "end", "room", "key", "status", "id", "op", "code", "sig", "message", "lockedId"])
+      if (ev[k] != null && typeof ev[k] !== "string") return false;
+    if (ev.attendees != null && !(Array.isArray(ev.attendees) && ev.attendees.length <= 500 && ev.attendees.every((a) => typeof a === "string" && a.length <= 120))) return false;
+    if (ev.idx != null && !Number.isInteger(ev.idx)) return false;
+  }
+  if (m.att != null && (typeof m.att !== "object" || !/^[0-9a-f]{32}$/.test(m.att.id || ""))) return false;
   return true;
+}
+// the time shown with a message is the sender's, in the shape this program writes it; anything else is replaced by the
+// time it arrived here
+const TSHAPE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?([+-]\d{4}|Z)?$/;
+// a message naming a channel counts in that channel only when its sender is a member there (the relay's member list)
+let CHMEM = { t: 0, list: [] };
+async function channelMember(ch, who) {
+  if (Date.now() - CHMEM.t > 30e3) { const r = await rq("GET", `/channels?member=${ACC}`).catch(() => null); CHMEM = { t: Date.now(), list: Array.isArray(r) ? r : [] }; }
+  const c = CHMEM.list.find((x) => x.id === ch);
+  if (c && (c.members || []).includes(who)) return true;
+  CHMEM.t = 0;                        // a member just added: look again once
+  const r = await rq("GET", `/channels?member=${ACC}`).catch(() => null); CHMEM = { t: Date.now(), list: Array.isArray(r) ? r : [] };
+  const c2 = CHMEM.list.find((x) => x.id === ch);
+  return !!(c2 && (c2.members || []).includes(who));
 }
 async function ingest(fromAcc, m) {
   const e = { from: fromAcc };
@@ -407,6 +444,7 @@ async function ingest(fromAcc, m) {
   {
     try {
       if (m.level > PEOPLE[ACC].level) { audit("msg-dropped", { from: e.from, level: m.level }); return; }
+      if (!TSHAPE.test(m.t || "")) m.t = stamp();
       if (m.att) m.att = await openAttachment(m.att, m.level);
       hist.push({ scope: m.ch ? "channel" : "dm", ch: m.ch || null, peer: m.ch ? ("#" + m.ch) : e.from,
                   from: e.from, dir: "in", text: m.text, level: m.level, t: m.t, thread: m.thread || null, id: m.id || null,
@@ -953,7 +991,7 @@ async function handle(req, res, remote) {
         const last = [...hist].reverse().find((m) => m.kind === "call" && conv(m) && m.ev);
         let level = Number(b.level) || 1;
         if (b.ch) { const chans = await rq("GET", `/channels?member=${ACC}`); const c = (chans || []).find((x) => x.id === b.ch); if (!c) throw new Error("Unknown channel."); level = Math.max(level, c.level || 1); }
-        if (u.pathname !== "/api/call/start") { if (!last) throw new Error("There is no call here."); level = last.level || level; }
+        if (u.pathname !== "/api/call/start") { if (!last) throw new Error("There is no call here."); level = Math.max(level, last.level || 1); }   // never below the channel's own level
         if (capErr(level)) return json(res, 200, { error: capErr(level) });
         if (level > PEOPLE[ACC].level) return json(res, 200, { error: `This call is L${level}; your clearance is L${PEOPLE[ACC].level}.` });
         if (remote && !official(req) && level > 2) return json(res, 200, { error: "This phone is not registered as government-issued. Calls above L2 need an official device." });
@@ -1131,6 +1169,7 @@ RSRV.on("upgrade", (req, sock, head) => {
 RSRV.listen(PORT + 100, "127.0.0.1");
 http.createServer((q, r) => handle(q, r, false)).listen(PORT, "127.0.0.1", async () => {
   await setup();
+  setInterval(() => { if (st && Object.keys(st.preKeys).length < 20) setup().catch(() => {}); }, 3600e3).unref();
   setInterval(() => receive().catch((e) => console.error(e)), 1000);
   let zbusy = false;
   setInterval(() => { if (zbusy) return; zbusy = true; watchRelease().catch((e) => console.error(e)).finally(() => { zbusy = false; }); }, 2000);

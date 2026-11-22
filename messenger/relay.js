@@ -16,18 +16,25 @@ fs.mkdirSync(DIR, { recursive: true });
 const BUNDLES = path.join(DIR, "bundles.json");
 const QUEUE = path.join(DIR, "queue.json");
 const load = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
-let bundles = load(BUNDLES, {});
-let queue = load(QUEUE, {});
+// Maps keyed by names that arrive in requests (accounts, numbers, channels, mailboxes) have no prototype, so a name such
+// as "__proto__" or "constructor" is never mistaken for an entry or written through an accessor.
+const nomap = (o) => Object.assign(Object.create(null), o && typeof o === "object" && !Array.isArray(o) ? o : {});
+const loadMap = (f) => nomap(load(f, {}));
+const has = (o, k) => typeof k === "string" && Object.prototype.hasOwnProperty.call(o, k);
+const ACCT = /^[a-z0-9][a-z0-9._-]{0,63}$/;          // account names
+let bundles = loadMap(BUNDLES);
+let queue = loadMap(QUEUE);
 const CHANNELS = path.join(DIR, "channels.json");
-let channels = load(CHANNELS, {});
+let channels = loadMap(CHANNELS);
 // ---------- phone-number accounts (Signal model) ----------
 // One phone number = one account (no impersonation: a verified number cannot be claimed by another account).
 // The number is never listed to others; people find you by username, or by number only if you allow it.
 const crypto = require("crypto");
 const PHONES = path.join(DIR, "phones.json");
-let phones = load(PHONES, {});                  // e164 -> { id, verified, via, at }
-const pending = {};
-const lookups = {};                             // caller -> recent lookup times                             // e164 -> { id, hash, exp, tries }
+let phones = loadMap(PHONES);                  // e164 -> { id, verified, via, at }
+const pending = nomap();
+const smsSent = nomap();                        // e164 -> times a code was sent
+const lookups = nomap();                             // caller -> recent lookup times                             // e164 -> { id, hash, exp, tries }
 const savePhones = () => fs.writeFileSync(PHONES, JSON.stringify(phones), { mode: 0o600 });
 const E164 = /^\+[1-9]\d{7,14}$/;
 const UNAME = /^[a-z_][a-z0-9_]{2,29}\.\d{2,9}$/;
@@ -57,11 +64,11 @@ function canApprove(c, who, pd) {
 const RETENTION_MS = 14 * 24 * 3600 * 1000;   // drop envelopes never collected within 14 days
 // ---------- stage 1: the relay delivers to random mailboxes and never learns who sent a message ----------
 // mailbox id -> { owner: sha256(owner token), uak: sha256(access key) | null for the public "intro" mailbox }
-const MBX = path.join(DIR, "mailboxes.json"); let mailboxes = load(MBX, {});
-const SQ = path.join(DIR, "sealed-queue.json"); let squeue = load(SQ, {});
+const MBX = path.join(DIR, "mailboxes.json"); let mailboxes = loadMap(MBX);
+const SQ = path.join(DIR, "sealed-queue.json"); let squeue = loadMap(SQ);
 const saveM = () => { fs.writeFileSync(MBX, JSON.stringify(mailboxes), { mode: 0o600 }); fs.writeFileSync(SQ, JSON.stringify(squeue), { mode: 0o600 }); };
 const H = (x) => require("crypto").createHash("sha256").update(String(x)).digest("hex");
-const introHits = {};
+const introHits = nomap();
 // sender certificates (Signal sealed sender): issued daily per account; the account is visible only at issuance, never per message
 const SS = require("@signalapp/libsignal-client");
 const CAF = path.join(DIR, "ca.json");
@@ -121,7 +128,7 @@ function body(req) {
 // The directory (directory.json next to the relay's data, or ZENOS_RELAY_DIRECTORY) is kept by the relay's administrator;
 // an account it does not list is L1 with no organization, whatever its bundle claims.
 const DIRF = process.env.ZENOS_RELAY_DIRECTORY || path.join(DIR, "directory.json");
-const directory = () => { const d = load(DIRF, {}); return d && typeof d === "object" ? d : {}; };
+const directory = () => loadMap(DIRF);
 function vetted(acc, nb) {
   const d = directory()[acc];
   nb.level = d ? Math.max(1, Math.min(5, Math.floor(Number(d.level)) || 1)) : 1;
@@ -135,10 +142,10 @@ for (const k of Object.keys(bundles)) vetted(k, bundles[k]);
 // "<METHOD> <path> <ms> <sha256(body)>". Requests older than five minutes, or seen before, are refused.
 // A new device takes an account over only after verifying the number already registered to it (Signal model).
 const SEEN = new Map();
-const rebind = {};                                   // account -> until (ms): a new device may publish a new identity key
+const rebind = nomap();                                   // account -> until (ms): a new device may publish a new identity key
 function authed(req, acc) {
   const [a, ts, sig] = String(req.headers["x-zenos-auth"] || "").split(" ");
-  const b = bundles[acc];
+  const b = has(bundles, acc) ? bundles[acc] : null;
   if (!acc || a !== acc || !b || !b.identity || !sig || Math.abs(Date.now() - Number(ts)) > 300e3 || SEEN.has(sig)) return false;
   try {
     const ok = SS.PublicKey.deserialize(Buffer.from(b.identity, "base64")).verify(Buffer.from(`${req.method} ${req.url} ${ts} ${H(req.raw || "")}`), Buffer.from(sig, "base64"));
@@ -157,7 +164,7 @@ const ADMIN = (process.env.ZENOS_RELAY_ADMIN || fs.readFileSync(ADMINF, "utf8"))
 const isAdmin = (req) => !!ADMIN && req.headers["x-zenos-admin"] === ADMIN;
 // enrollment: with ZENOS_RELAY_ENROLL=1 a new account needs a one-time code the administrator issued for that name
 const ENROLL_REQUIRED = process.env.ZENOS_RELAY_ENROLL === "1";
-const ENROLLF = path.join(DIR, "enroll.json"); let enrolls = load(ENROLLF, {});   // account -> { hash, exp }
+const ENROLLF = path.join(DIR, "enroll.json"); let enrolls = loadMap(ENROLLF);   // account -> { hash, exp }
 const saveEnroll = () => fs.writeFileSync(ENROLLF, JSON.stringify(enrolls), { mode: 0o600 });
 function send(res, code, obj) {
   const b = JSON.stringify(obj);
@@ -178,21 +185,25 @@ function deliverSealed(mbx, uak, b64body) {
   audit("msg-sealed-delivered", { mailbox: mbx.slice(0, 8), bytes: Buffer.from(b64body, "base64").length });
   return { status: 200, body: { ok: true } };
 }
-// One-time prekeys are few (a device publishes 20). Each signed-in account may use up at most TAKE_MAX of them per
-// hour; past that it still gets the bundle, without a one-time prekey (a session then starts from the signed and
-// Kyber prekeys alone), so no one can empty another account's prekeys by asking again and again.
-const TAKE_MAX = 30, TAKES = new Map();
-function mayTake(by) {
-  const now = Date.now(), t = (TAKES.get(by) || []).filter((x) => now - x < 3600e3);
-  if (t.length >= TAKE_MAX) { TAKES.set(by, t); return false; }
-  t.push(now); TAKES.set(by, t); return true;
+// One-time prekeys are few (a device keeps 20 published and tops them up every hour). A requester gets at most one of
+// a given account's per hour, all requesters together at most TARGET_MAX per account per hour, and any one requester
+// at most TAKE_MAX in all; past that the bundle comes without a one-time prekey (a session then starts from the signed
+// and Kyber prekeys alone). So asking again and again, or from many accounts, cannot empty another account's prekeys.
+const TAKE_MAX = 30, TARGET_MAX = 10, TAKES = new Map();
+function recentTakes(k) { const now = Date.now(), t = (TAKES.get(k) || []).filter((x) => now - x < 3600e3); TAKES.set(k, t); return t; }
+function mayTake(by, acc) {
+  const a = recentTakes("by " + by), b = recentTakes("to " + acc), c = recentTakes("pair " + by + " " + acc);
+  if (a.length >= TAKE_MAX || b.length >= TARGET_MAX || c.length >= 1) return false;
+  const now = Date.now(); a.push(now); b.push(now); c.push(now); return true;
 }
 function bundleFor(acc, by) {                // a key bundle for a new session; the one-time prekey is used up
-  const b = bundles[acc];
+  const b = has(bundles, acc) ? bundles[acc] : null;
   if (!b) return null;
-  const take = mayTake(by || "?");
-  const out = { ...b, preKey: take ? ((b.preKeys || []).shift() || null) : null };
-  delete out.preKeys; delete out.enroll;
+  const take = mayTake(by || "?", acc);
+  const pk = take ? ((b.preKeys || []).shift() || null) : null;
+  if (pk) b.used = [...(b.used || []), pk.id].slice(-4096);
+  const out = { ...b, preKey: pk };
+  delete out.preKeys; delete out.enroll; delete out.used;
   save();
   return out;
 }
@@ -269,9 +280,14 @@ http.createServer(async (req, res) => {
     if (req.method === "POST" && parts[0] === "register" && parts[1] === "start") {
       const { phone, id } = await body(req);
       if (!E164.test(phone || "")) return send(res, 400, { error: "Use the international format, e.g. +81 90 1234 5678." });
+      if (!ACCT.test(id || "") || !has(bundles, id)) return send(res, 400, { error: "Set up this device first: the account has to exist before a number is added." });
       const own = authed(req, id);
       const cur = Object.keys(phones).find((k) => phones[k].verified && phones[k].id === id);
-      if (bundles[id] && !own && cur !== phone) return refuse(res, id, "register");   // only the device, or the account's own number
+      if (!own && cur !== phone) return refuse(res, id, "register");   // only the device, or the account's own number
+      // codes to one number: at most 3 an hour, so the tries limit below is not reset by asking again
+      const sent = (smsSent[phone] || []).filter((x) => Date.now() - x < 3600e3);
+      if (sent.length >= 3) { audit("msg-register-throttled", { account: id }); return send(res, 429, { error: "Too many codes for this number. Try again in an hour." }); }
+      smsSent[phone] = [...sent, Date.now()];
       if (phones[phone] && phones[phone].verified && phones[phone].id !== id) {
         audit("msg-register-conflict", { account: id });
         return send(res, 409, { error: "This number is already registered to another account." });
@@ -339,6 +355,7 @@ http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && parts[0] === "keys") {          // publish a public key bundle
       const nb = await body(req);
+      if (!ACCT.test(parts[1] || "") || !nb || typeof nb !== "object" || Array.isArray(nb)) return send(res, 400, { error: "bad account name" });
       if (nb.username && !UNAME.test(nb.username)) return send(res, 400, { error: "bad username" });
       if (nb.username && Object.keys(bundles).some((k) => k !== parts[1] && bundles[k].username === nb.username)) return send(res, 409, { error: "username taken" });
       const old = bundles[parts[1]];
@@ -355,6 +372,12 @@ http.createServer(async (req, res) => {
         else { audit("msg-keys-refused", { account: parts[1], reason: "bound" });
                return send(res, 409, { error: "This account is registered on another device. Verify with the account's number to move it here." }); }
       }
+      // the same device publishing again: a one-time prekey already handed out is never offered again
+      if (old && old.identity && nb.identity === old.identity) {
+        const used = new Set(old.used || []), held = new Map((old.preKeys || []).map((k) => [k.id, k]));
+        for (const k of Array.isArray(nb.preKeys) ? nb.preKeys : []) if (k && !used.has(k.id) && !held.has(k.id)) held.set(k.id, k);
+        nb.preKeys = [...held.values()].slice(0, 100); nb.used = [...used].slice(-4096);
+      } else nb.used = [];
       bundles[parts[1]] = vetted(parts[1], nb);
       save();
       audit("msg-keys-published", { account: parts[1] });

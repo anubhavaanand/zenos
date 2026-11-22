@@ -24,4 +24,9 @@ check("not in a call: refused", !ok(msg({}), { ...dm, room: null }));
 // ui.html takes keys only through this rule
 const ui = fs.readFileSync(path.join(__dirname, "..", "messenger", "ui.html"), "utf8");
 check("the page applies keys from messages only through the rule", (ui.match(/ZCall\.applyKey\(m\./g) || []).length === 1 && ui.includes("ZCall.keyMessageOk(m,kctx)"));
+// times and relay-supplied membership details reach the page as text only
+const hmF = new Function("esc", ui.match(/const hm=t=>[^;]+;/)[0] + ui.match(/const dayt=t=>[^;]+;/)[0] + "return dayt;");
+const escF = new Function(ui.match(/const esc=s=>[^\n]+;/)[0] + "return esc;")();
+check("a time from a sender is shown as text", !/[<>]/.test(hmF(escF)("0000x-<!-- 00:00")) && !/[<>]/.test(hmF(escF)("9999x--->x 00:00")));
+check("the relay's approval level and membership history are escaped", ui.includes("(L${esc(String(a.level))})") && ui.includes("${esc(l.act)}"));
 console.log(fail ? `${fail} FAILED` : "ALL OK"); process.exit(fail ? 1 : 0);

@@ -59,15 +59,32 @@ let fail = 0; const check = (name, cond, got) => { console.log((cond ? "ok   " :
   const added = r[0] === 200;
   r = await rq(T, "tanaka", "POST", "/channels", { id: "raise-room", name: "#r", level: 4, by: "tanaka" });
   check("a channel cannot be raised above a member's clearance", added && r[0] === 403, r);
-  // one-time prekeys: only a registered device may fetch a bundle, and each may use up only so many per hour
-  const P = S.IdentityKeyPair.generate(), pre = Array.from({ length: 40 }, (_, i) => ({ id: i + 1, pub: "k" + i }));
+  // one-time prekeys: only a registered device may fetch a bundle; one per requester and account an hour, ten per account
+  const P = S.IdentityKeyPair.generate(), pre = Array.from({ length: 20 }, (_, i) => ({ id: i + 1, pub: "k" + i }));
   await rq(null, "pk", "POST", "/keys/pk", { name: "pk", identity: b64(P.publicKey.serialize()), preKeys: pre });
   r = await rq(null, "x", "GET", "/keys/pk"); check("an unsigned bundle fetch is refused", r[0] === 403, r);
-  r = await rq(T, "tanaka", "GET", "/keys/pk"); check("a signed fetch gets a one-time prekey", r[0] === 200 && r[1].preKey && r[1].preKey.id === 1, r);
-  for (let i = 1; i < 30; i++) r = await rq(T, "tanaka", "GET", "/keys/pk");
-  const last = r; r = await rq(T, "tanaka", "GET", "/keys/pk");
-  check("past the hourly budget, the bundle comes without a one-time prekey", last[1].preKey && r[0] === 200 && r[1].preKey === null && r[1].identity, r);
-  r = await rq(M, "mallory", "GET", "/keys/pk"); check("another account still gets the next prekey", r[0] === 200 && r[1].preKey && r[1].preKey.id === 31, r);
+  r = await rq(T, "tanaka", "GET", "/keys/pk"); check("a signed fetch gets a one-time prekey", r[0] === 200 && r[1].preKey && r[1].preKey.id === 1 && !r[1].used, r);
+  r = await rq(T, "tanaka", "GET", "/keys/pk"); check("the same requester again within the hour: no second one-time prekey", r[0] === 200 && r[1].preKey === null && r[1].identity, r);
+  const many = [];
+  for (let i = 0; i < 12; i++) {            // twelve throwaway accounts ask for pk's bundle
+    const K = S.IdentityKeyPair.generate(), n = "sy" + i;
+    await rq(null, n, "POST", "/keys/" + n, { name: n, identity: b64(K.publicKey.serialize()) });
+    many.push((await rq(K, n, "GET", "/keys/pk"))[1].preKey);
+  }
+  check("many accounts together use up at most ten of one account's prekeys an hour", many.filter(Boolean).length === 9 && many.slice(9).every((x) => x === null), many.map((x) => x && x.id));
+  // the owner publishing again (top-up) does not bring back a prekey that was handed out
+  r = await rq(P, "pk", "POST", "/keys/pk", { name: "pk", identity: b64(P.publicKey.serialize()), preKeys: [...pre, { id: 21, pub: "k20" }] });
+  const Q = S.IdentityKeyPair.generate();
+  await rq(null, "fresh", "POST", "/keys/fresh", { name: "fresh", identity: b64(Q.publicKey.serialize()) });
+  r = await rq(Q, "fresh", "GET", "/keys/pk"); check("a handed-out prekey is never offered again after the owner publishes", r[0] === 200 && r[1].preKey === null, r);   // pk's hourly budget is spent
+  // names that are not account names: never an account, never a way around enrollment or the device binding
+  for (const bad of ["__proto__", "../x", "A", "a b"]) {
+    r = await rq(null, bad, "POST", "/keys/" + encodeURIComponent(bad), { identity: b64(Q.publicKey.serialize()), ghost: { identity: b64(Q.publicKey.serialize()), level: 5 } });
+    check(`"${bad}" cannot be registered`, r[0] === 400, r);
+  }
+  r = await rq(Q, "ghost", "GET", "/channels?member=ghost"); check("a name nobody registered is not an account", r[0] === 403, r);
+  // a number cannot be bound to an account before that account exists (and later move it to a new device)
+  r = await rq(null, "notyet", "POST", "/register/start", { phone: "+15555550177", id: "notyet" }); check("no number for an account that does not exist", r[0] === 400, r);
   // a relay that registers new accounts only with an administrator's enrollment code
   const port2 = PORT + 1, R2 = `http://127.0.0.1:${port2}`, HOME2 = fs.mkdtempSync(path.join(os.tmpdir(), "zbind-"));
   const relay2 = spawn(process.execPath, [path.join(MSG, "relay.js")], { env: { ...process.env, HOME: HOME2, ZENOS_RELAY_DIRECTORY: path.join(__dirname, "fixtures", "msg-directory.json"), ZENOS_RELAY_PORT: String(port2), ZENOS_RELAY_ENROLL: "1" }, stdio: "ignore" });

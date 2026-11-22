@@ -449,8 +449,9 @@ const extTag=id=>isExt(id)?` <span class="ext" title="${esc((people[id]||{}).org
 const ckey=m=>m.ch?"c:"+m.ch:"d:"+m.peer;
 const curKey=()=>cur?(cur.type==="channel"?"c:"+cur.id:"d:"+cur.id):null;
 const who=m=>m.from||(m.dir==="out"?me.id:m.peer);
-const hm=t=>(t||"").slice(11,16);
-const dayt=t=>(t||"").slice(5,10).replace("-","/")+" "+hm(t);
+// times come from senders and the relay: shown as text only
+const hm=t=>esc(String(t||"").slice(11,16));
+const dayt=t=>esc(String(t||"").slice(5,10).replace("-","/"))+" "+hm(t);
 let saveT=null;const saveLoc=()=>{clearTimeout(saveT);saveT=setTimeout(()=>post("local",loc),400);};
 
 function av(id,cls=""){const f=AVF[id];const p=P(id);
@@ -623,7 +624,7 @@ function activity(){
   const myThreads=new Set(msgs().filter(m=>who(m)===me.id).map(m=>m.thread||m.id));
   for(const m of all){
     if(m.dir!=="in")continue;
-    if(kind(m)==="event"&&m.ev&&!m.locked&&(m.ev.attendees||[]).includes(me.id)){out.push({t:m.t,type:"invite",m});continue;}
+    if(kind(m)==="event"&&m.ev&&!m.locked&&Array.isArray(m.ev.attendees)&&m.ev.attendees.includes(me.id)){out.push({t:m.t,type:"invite",m});continue;}
     if(kind(m)==="react"&&m.on&&mine.has(m.target)){out.push({t:m.t,type:"react",m,target:findMsg(m.target)});continue;}
     if(kind(m)!=="msg")continue;
     if(mentionsMe(m))out.push({t:m.t,type:"mention",m});
@@ -952,7 +953,7 @@ function openMembers(chId){
      <div id="invres" class="chk"></div></div>
    ${pend.length?`<div><div class="secth">Waiting for a second approval (${pend.length})</div>${pend.map(x=>`<div class="ml">${av(x.target)}<div class="nm">${esc(split(P(x.target).name).name)}${extTag(x.target)}<small>requested by ${esc(split(P(x.by).name).name)} · ${dayt(x.t)}</small></div>${x.by===me.id?'<span class="lg">needs someone else</span>':`<button class="send" data-ap="${esc(x.target)}">Approve</button><span class="btn2" data-dn="${esc(x.target)}">Decline</span>`}</div>`).join("")}</div>`:""}
    <div><div class="secth">Members (${c.members.length})</div>${c.members.map(id=>`<div class="ml">${av(id)}<div class="nm">${esc(split(P(id).name).name)}${id===me.id?" (you)":""}${extTag(id)}<small>${esc(P(id).role||"")} · L${esc(String(P(id).level))}${(people[id]||{}).phoneVerified?' · <span class="ok">✓ number verified</span>':""}</small></div>${id!==me.id?`<span class="btn2" data-rm="${esc(id)}">Remove</span>`:""}</div>`).join("")}</div>
-   ${log.length?`<div><div class="secth">Membership history</div><div class="lg">${log.map(l=>`${dayt(l.t)} — ${esc(split(P(l.by).name).name)} ${l.act}${l.target?" "+esc(split(P(l.target).name).name):""}${l.approvedBy?" (approved by "+esc(split(P(l.approvedBy).name).name)+")":""}${l.external?" · EXTERNAL":""}`).join("<br>")}</div></div>`:""}`;
+   ${log.length?`<div><div class="secth">Membership history</div><div class="lg">${log.map(l=>`${dayt(l.t)} — ${esc(split(P(l.by).name).name)} ${esc(l.act)}${l.target?" "+esc(split(P(l.target).name).name):""}${l.approvedBy?" (approved by "+esc(split(P(l.approvedBy).name).name)+")":""}${l.external?" · EXTERNAL":""}`).join("<br>")}</div></div>`:""}`;
   mm.style.display="grid";bind($("mmbox"));
   $("mmx").onclick=closeMM;
   const doAct=async(act,target)=>{const r=await post("channel/"+act,{ch:c.id,target});if(r.error){$("invres").innerHTML=`<span class="ng">${esc(r.error)}</span>`;return;}await refreshChans();await pull();openMembers(c.id);};
@@ -990,7 +991,7 @@ $("newch").onclick=e=>{e.stopPropagation();
 let approvals=[];
 async function pullApprovals(){approvals=await api("approvals").catch(()=>[])||[];}
 function approvalsHtml(){if(!approvals.length)return "";
-  return `<div class="card" style="cursor:default;border-color:#5b4a1a"><div class="where"><b>Waiting for your approval</b> — you are the second person</div>${approvals.map(a=>`<div class="ml" style="display:flex;gap:10px;align-items:center;font-size:14px;color:var(--t-row)">${av(a.target)}<div style="flex:1">${esc(split(P(a.by).name).name)} wants to add <b>${esc(split(P(a.target).name).name)}</b>${extTag(a.target)} to <b>#${esc(a.ch)}</b> (L${a.level})</div><button class="send" data-apv="${esc(a.ch)}|${esc(a.target)}">Approve</button><span class="btn2" data-dnv="${esc(a.ch)}|${esc(a.target)}">Decline</span></div>`).join("")}</div>`;}
+  return `<div class="card" style="cursor:default;border-color:#5b4a1a"><div class="where"><b>Waiting for your approval</b> — you are the second person</div>${approvals.map(a=>`<div class="ml" style="display:flex;gap:10px;align-items:center;font-size:14px;color:var(--t-row)">${av(a.target)}<div style="flex:1">${esc(split(P(a.by).name).name)} wants to add <b>${esc(split(P(a.target).name).name)}</b>${extTag(a.target)} to <b>#${esc(a.ch)}</b> (L${esc(String(a.level))})</div><button class="send" data-apv="${esc(a.ch)}|${esc(a.target)}">Approve</button><span class="btn2" data-dnv="${esc(a.ch)}|${esc(a.target)}">Decline</span></div>`).join("")}</div>`;}
 function bindApprovals(root){
   const go=async(act,v)=>{const [ch,target]=v.split("|");const r=await post("channel/"+act,{ch,target});if(r.error)$("err").textContent=r.error;await pullApprovals();await refreshChans();render(true);};
   root.querySelectorAll("[data-apv]").forEach(b=>b.onclick=e=>{e.stopPropagation();go("approve",b.dataset.apv);});

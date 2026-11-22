@@ -55,12 +55,20 @@ function signer(keyFile) {
   return { pub: rawFromPub(crypto.createPublicKey(priv)), sign: (text) => b64(crypto.sign(null, Buffer.from(text), priv)) };
 }
 
+/** At most `max` bytes of an answer from another relay: a longer one is cut off and refused. */
+async function readCapped(r, max) {
+  const n = Number(r.headers.get("content-length") || 0);
+  if (n > max) { try { await r.body.cancel(); } catch {} throw new Error("answer too large"); }
+  const parts = []; let got = 0;
+  for await (const c of r.body || []) { got += c.length; if (got > max) { try { await r.body.cancel(); } catch {} throw new Error("answer too large"); } parts.push(Buffer.from(c)); }
+  return Buffer.concat(parts);
+}
 /** A signed request to another relay. */
 async function relayRequest(me, url, method, p, obj) {
   const raw = obj ? JSON.stringify(obj) : ""; const ts = String(Date.now());
   const h = { "Content-Type": "application/json", "X-Zenos-Relay": `${me.org} ${ts} ${me.sign(reqText(method, p, ts, raw))}` };
   const r = await fetch(url.replace(/\/$/, "") + p, { method, headers: h, body: raw || undefined, signal: AbortSignal.timeout(15000) });
-  let j = {}; try { j = await r.json(); } catch {}
+  let j = {}; try { j = JSON.parse((await readCapped(r, 2 * 1024 * 1024)).toString("utf8")); } catch {}
   return { status: r.status, body: j };
 }
 
@@ -90,7 +98,14 @@ function federation(ctx) {
     };
   }
   // the entry the decision will use: the first one whose signatures count (same rule as `lookup` in the proof)
+  // the member list's signatures are verified once per list, not on every request
+  const ENTRY = { ref: null, map: new Map() };
   function entryOf(org) {
+    if (ENTRY.ref !== members) { ENTRY.ref = members; ENTRY.map = new Map(); }
+    if (!ENTRY.map.has(org)) ENTRY.map.set(org, entryOfUncached(org));
+    return ENTRY.map.get(org);
+  }
+  function entryOfUncached(org) {
     const d = decideReq(org, org, "alert", 0, true, true), need = d.k;
     const i = d.members.findIndex((m) => m.org === org && need >= 2 && new Set(m.sigs.filter((s) => s.ok && d.authorities.includes(s.by)).map((s) => s.by)).size >= need);
     return i < 0 ? null : members.entries[i];
@@ -102,9 +117,13 @@ function federation(ctx) {
     const [from, ts, sig] = hdr;
     if (!cfg || !cfg.org) return { allow: false, reason: "federation is not set up on this relay" };
     if (!ORG.test(from || "") || !ts || !sig) return { allow: false, reason: "unsigned" };
+    // the cheap refusals first: an old or replayed request, or one whose signature does not verify, is refused here,
+    // without verifying the member list or starting the decision program
+    const now = Date.now(); const fresh = Math.abs(now - Number(ts)) < 300e3 && !SEEN.has(sig);
+    if (!fresh) return { allow: false, reason: SEEN.has(sig) ? "replay" : "stale", from };
     const e = entryOf(from);
     const sigOk = !!e && verify(e.key, reqText(req.method, req.url, ts, raw), sig);
-    const now = Date.now(); const fresh = Math.abs(now - Number(ts)) < 300e3 && !SEEN.has(sig);
+    if (!sigOk) return { allow: false, reason: "signature", from };
     const d = decide(decideReq(from, cfg.org, kind, level, sigOk, fresh));
     if (d.allow) { SEEN.set(sig, now); for (const [k, t] of SEEN) if (now - t > 600e3) SEEN.delete(k); }
     return { ...d, from };
@@ -171,7 +190,7 @@ function federation(ctx) {
       const out = {};
       for (const e of (members && members.entries) || []) {
         if (e.publish_only || entryOf(e.org) !== e || (cfg && e.org === cfg.org)) continue;
-        try { const r = await fetch(e.url.replace(/\/$/, "") + "/.well-known/zenos-relay", { signal: AbortSignal.timeout(8000) }); const j = await r.json();
+        try { const r = await fetch(e.url.replace(/\/$/, "") + "/.well-known/zenos-relay", { signal: AbortSignal.timeout(8000) }); const j = JSON.parse((await readCapped(r, 64 * 1024)).toString("utf8"));
               if (j.org === e.org && j.key === e.key && j.trust) out[e.org] = j.trust; } catch {}
       }
       return send(res, 200, out), true;
@@ -232,7 +251,7 @@ function federation(ctx) {
       const ts = String(Date.now()), p = "/fed/blobs/" + parts[3];
       try {
         const r = await fetch(d.entry.url.replace(/\/$/, "") + p, { headers: { "X-Zenos-Relay": `${me.org} ${ts} ${me.sign(reqText("GET", p, ts, ""))}` }, signal: AbortSignal.timeout(30000) });
-        const buf = Buffer.from(await r.arrayBuffer());
+        const buf = await readCapped(r, 27 * 1024 * 1024);     // an attachment is at most 26 MB (relay.js /blobs)
         ctx.audit("fed-blob-fetched", { from_org: parts[2], status: r.status, bytes: buf.length });
         res.writeHead(r.status, { "Content-Type": r.ok ? "application/octet-stream" : "application/json" }); res.end(buf);
       } catch (err) { send(res, 502, { error: "the other organization's relay did not answer" }); }
