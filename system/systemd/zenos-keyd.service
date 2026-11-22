@@ -17,7 +17,9 @@ PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
-ProtectControlGroups=yes
+# The cgroup tree stays writable for one thing: putting a process given L4+ plaintext in a cgroup of its own under
+# /sys/fs/cgroup/zenos-holders, so the network sentinel sees everything it starts (zenos_keyd.py cgroup_hold).
+ProtectControlGroups=no
 ProtectClock=yes
 ProtectHostname=yes
 RestrictNamespaces=yes

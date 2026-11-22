@@ -282,6 +282,36 @@ class OpenHolders(unittest.TestCase):
             self.assertFalse(ns.holders_alive(path))                    # L3 does not cut the network
 
 
+class HolderCgroups(unittest.TestCase):
+    """keyd puts each L4+ holder in a cgroup of its own; whatever is born in it stays there, however the processes in
+    between exit, so a child started and left between two looks still keeps the network cut"""
+    def test_a_process_in_a_holder_cgroup_holds(self):
+        import subprocess, importlib
+        with tempfile.TemporaryDirectory() as d:
+            cg = os.path.join(d, "cg")
+            os.environ.update(ZENOS_HOLD_CGROUP=cg, ZENOS_OPEN_KIDS=os.path.join(d, "kids.json"),
+                              ZENOS_OPEN_HOLDERS=os.path.join(d, "holders.json"))
+            import zenos_keyd as kd, zenos_netsentinel as ns
+            importlib.reload(kd); importlib.reload(ns)
+            empty = os.path.join(d, "none.json")
+            with open(empty, "w") as f:
+                f.write("[]")
+            p = subprocess.Popen(["sleep", "30"])
+            try:
+                start = open("/proc/%d/stat" % p.pid).read().rsplit(")", 1)[1].split()[19]
+                kd.cgroup_hold([{"pid": p.pid, "start": start}], 4)
+                g = os.path.join(cg, "L4-%d-%s" % (p.pid, start))
+                self.assertEqual(open(os.path.join(g, "cgroup.procs")).read().split(), [str(p.pid)])
+                self.assertTrue(ns.holders_alive(empty))           # not in keyd's list, not a known child: held anyway
+                kd.cgroup_hold([{"pid": p.pid, "start": start}], 3)
+                os.rename(g, os.path.join(cg, "moved"))            # only the L3 cgroup is left
+                self.assertFalse(ns.holders_alive(empty))          # L3 does not cut the network
+                os.rename(os.path.join(cg, "moved"), g)
+            finally:
+                p.kill(); p.wait()
+            self.assertFalse(ns.holders_alive(empty))              # gone: nothing holds
+
+
 class DropList(unittest.TestCase):
     """an anyone-can-receive service (webhook.site and the like) is cut at the first byte for every account, in
     monitor mode too; an address a listed destination shares is never cut"""

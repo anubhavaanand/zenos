@@ -51,6 +51,10 @@ AIGUARD_UNITS = [u for u in os.environ.get("ZENOS_AIGUARD_UNIT", "/lib/systemd/s
 # who holds L4+ plaintext: the process that asked for it (pid and start time, from the socket), read by the network
 # sentinel, which keeps the network cut while that process or anything it started is alive
 HOLDERS = Path(os.environ.get("ZENOS_OPEN_HOLDERS", "/run/zenos/open-holders.json"))
+# ...and each such process is also put in a cgroup of its own under this one. Everything it starts is born in that
+# cgroup and stays there however the processes in between exit (reparenting does not move a process out of its
+# cgroup), so the sentinel sees a child handed the plaintext even if it was started and left between two looks.
+HOLD_CG = Path(os.environ.get("ZENOS_HOLD_CGROUP", "/sys/fs/cgroup/zenos-holders"))
 MAGIC = b"ZENOS1\n"
 LABEL = {1: "Public", 2: "Confidentiality 2", 3: "Confidentiality 3",
          4: "Important Economic Security Information", 5: "Specially Designated Secret"}
@@ -301,6 +305,20 @@ def socket_holders(ino, uid):
     return pids
 
 
+def cgroup_hold(recs, level):
+    """put each holder in HOLD_CG/L<level>-<pid>-<start> (no controllers: only membership is used). Without cgroup v2
+    here this does nothing, and the sentinel follows children by looking, as before."""
+    for r in recs:
+        try:
+            HOLD_CG.mkdir(mode=0o755, exist_ok=True)
+            g = HOLD_CG / f"L{int(level)}-{int(r['pid'])}-{int(r['start'])}"
+            g.mkdir(mode=0o755, exist_ok=True)
+            with open(g / "cgroup.procs", "a") as f:
+                f.write(f"{int(r['pid'])}\n")
+        except (OSError, ValueError):
+            pass
+
+
 def hold(pid, uid, level, ino=None):
     """note the processes that now hold plaintext of `level` (the sentinel cuts the network from L4 while any of
     them, or anything they start, lives): every process holding our connection's client end, and the connector.
@@ -326,6 +344,7 @@ def hold(pid, uid, level, ino=None):
             os.replace(tmp, HOLDERS)
         except OSError:
             return False
+    cgroup_hold(recs, level)
     return True
 
 

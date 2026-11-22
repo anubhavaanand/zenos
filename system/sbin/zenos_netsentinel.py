@@ -466,6 +466,37 @@ _KIDS = _load_kids()  # descendants of holders found so far (pid -> start time),
                       # (root's, for restarts); the holders file is keyd's alone
 
 
+HOLD_CG = os.environ.get("ZENOS_HOLD_CGROUP", "/sys/fs/cgroup/zenos-holders")    # zenos_keyd.py cgroup_hold()
+
+
+def cgroup_holders(min_level=4, root=None):
+    """pids alive in a holder cgroup of L4+ that keyd made; a cgroup left empty is removed"""
+    root = root or HOLD_CG
+    out = set()
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return out
+    for n in names:
+        parts = n.split("-")
+        if len(parts) != 3 or not parts[0].startswith("L") or not parts[0][1:].isdigit():
+            continue
+        g = os.path.join(root, n)
+        try:
+            pids = {int(x) for x in open(os.path.join(g, "cgroup.procs")).read().split() if x.isdigit()}
+        except OSError:
+            continue
+        pids = {p for p in pids if _proc_stat(p)}
+        if pids and int(parts[0][1:]) >= min_level:
+            out |= pids
+        elif not pids:
+            try:
+                os.rmdir(g)
+            except OSError:
+                pass
+    return out
+
+
 def holders_alive(path=OPEN_HOLDERS, min_level=4):
     """True while a process that received L4+ plaintext from zenos-keyd (recorded there, root-owned), or a process it
     started, is still alive. Children are followed as they appear and remembered here, so handing the plaintext to
@@ -500,7 +531,7 @@ def holders_alive(path=OPEN_HOLDERS, min_level=4):
                         grown = True
     if _KIDS != before:
         _save_kids(_KIDS)
-    return bool(live)
+    return bool(live) or bool(cgroup_holders(min_level))
 
 
 def open_flag_watch():
