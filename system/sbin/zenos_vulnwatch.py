@@ -83,10 +83,19 @@ def applied():
 
 
 def mitigated_cves():
+    """{cve: mitigation id} for mitigations applied here, and only while the record is the one that was signed and
+    applied: a record changed afterwards (another CVE added to its list, say) mitigates nothing"""
     out = {}
     recs = mitigation_records()
-    for mid in applied():
-        for c in ((recs.get(mid) or {}).get("manifest") or {}).get("cves", []):
+    for mid, ap in applied().items():
+        rec = recs.get(mid)
+        try:
+            same = bool(rec) and isinstance(ap, dict) and ap.get("digest") == zsupply.record_digest(rec)
+        except (ValueError, KeyError, TypeError):
+            same = False
+        if not same:
+            continue
+        for c in rec["manifest"].get("cves", []):
             out[c] = mid
     return out
 
@@ -157,7 +166,7 @@ def apply(mid, findings, keys=None, required=None, decide=None, run=True):
             for x in a["modules"]:
                 subprocess.run(["modprobe", "-r", x], capture_output=True, timeout=30)
     ap = applied()
-    ap[mid] = {"t": int(time.time()), "file": str(p), "signatures": sigs}
+    ap[mid] = {"t": int(time.time()), "file": str(p), "signatures": sigs, "digest": zsupply.record_digest(rec)}
     _write(APPLIED, ap, 0o600)
     record("mitigation-applied", id=mid, cves=m["cves"], signatures=sigs, file=str(p))
     return p

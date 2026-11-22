@@ -179,6 +179,18 @@ class Vuln(unittest.TestCase):
         self.assertEqual(st[("CVE-2026-1001", "openssl")], "mitigated")
         self.assertIn("mitigation-applied", [e["event"] for e in self.ledger()])
 
+    def test_a_record_changed_after_it_was_applied_mitigates_nothing(self):
+        s = self.run_once()
+        self.mitigation(["ito", "kato"])
+        self.W.apply("openssl-tls-off", s["findings"], keys=self.keys, required=2, run=False)
+        p = self.W.MITIGATIONS / "openssl-tls-off.json"
+        rec = json.loads(p.read_text())
+        rec["manifest"]["cves"].append("CVE-2026-4001")          # the signatures stay, the list grows
+        p.write_text(json.dumps(rec))
+        st = {(f["cve"], f["package"]): f["status"] for f in self.run_once()["findings"]}
+        self.assertEqual(st[("CVE-2026-1001", "openssl")], "affected")
+        self.assertNotEqual(st.get(("CVE-2026-4001", "curl")), "mitigated")
+
     def test_no_mitigation_for_a_part_that_is_not_affected(self):
         s = self.run_once()
         self.mitigation(["ito", "kato"], cves=("CVE-2026-2001",))
