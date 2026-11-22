@@ -144,7 +144,8 @@ def post(url, body):
     if u.scheme != "https" and u.hostname not in ("127.0.0.1", "localhost", "::1"):
         raise ValueError("audit nodes must be reached over https")
     req = urllib.request.Request(url.rstrip("/") + "/v1/batch", data=json.dumps(body, ensure_ascii=False).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+                                 headers={"Content-Type": "application/json",
+                                          "X-Zenos-Machine": str(body.get("machine", ""))}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=20, context=ssl.create_default_context() if u.scheme == "https" else None) as r:
             return r.status, json.loads(r.read())

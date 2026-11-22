@@ -35,6 +35,26 @@ from cryptography.hazmat.primitives import serialization          # noqa: E402
 
 NAME = re.compile(r"^(?!.*__)(?!_)(?!.*_$)[A-Za-z0-9_.-]{1,64}$")   # no "__", none at an end: "__" joins machine and chain in file names
 MAX_BATCH = 2000
+MAX_BODY = 32 * 1024 * 1024
+BODY_TIMEOUT = 30
+BODY_SLOTS = threading.BoundedSemaphore(8)    # batches read into memory at once; more wait for the sender's retry
+
+
+def post_gate(node, headers):
+    """(0, "") when a batch may be read; otherwise (status, reason), decided from the headers alone, before a byte of
+    the body is read: only a machine enrolled here may make this node read up to MAX_BODY into memory"""
+    machine = headers.get("X-Zenos-Machine") or ""
+    if not NAME.match(machine):
+        return 403, "name the sending machine (X-Zenos-Machine)"
+    if not (node.dir / "machines" / f"{machine}.pub").exists():
+        return 403, "machine not enrolled"
+    try:
+        n = int(headers.get("Content-Length") or 0)
+    except ValueError:
+        return 400, "bad length"
+    if n <= 0 or n > MAX_BODY:
+        return 413, "too large"
+    return 0, ""
 lock = threading.Lock()
 status_lock = threading.Lock()        # heartbeats never wait behind another PC's chain work
 # what one PC may keep here: no PC (nor a person on it, through their own ledger) fills the node's disk for the rest
@@ -542,16 +562,26 @@ def serve(node, host, port, cert=None, key=None, silence=90, peers=(), check_eve
             self.end_headers()
             self.wfile.write(body)
 
+        timeout = BODY_TIMEOUT          # a client that sends slowly is dropped, not waited for
+
         def do_POST(self):
             if self.path != "/v1/batch":
                 return self.reply(404, {"ok": False})
-            n = int(self.headers.get("Content-Length") or 0)
-            if n <= 0 or n > 32 * 1024 * 1024:
-                return self.reply(413, {"ok": False, "error": "too large"})
+            code, why = post_gate(node, self.headers)
+            if code:
+                return self.reply(code, {"ok": False, "error": why})
+            if not BODY_SLOTS.acquire(blocking=False):
+                return self.reply(503, {"ok": False, "error": "busy, send again shortly"})
             try:
-                b = json.loads(self.rfile.read(n))
-            except Exception:
-                return self.reply(400, {"ok": False, "error": "not JSON"})
+                n = int(self.headers.get("Content-Length") or 0)
+                try:
+                    b = json.loads(self.rfile.read(n))
+                except Exception:
+                    return self.reply(400, {"ok": False, "error": "not JSON"})
+            finally:
+                BODY_SLOTS.release()
+            if not isinstance(b, dict) or str(b.get("machine")) != self.headers.get("X-Zenos-Machine"):
+                return self.reply(403, {"ok": False, "error": "batch is not from the machine named in the request"})
             self.reply(*node.accept(b))
 
         def do_GET(self):

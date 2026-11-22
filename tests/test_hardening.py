@@ -196,6 +196,55 @@ class KeydHolders(unittest.TestCase):
             del os.environ["ZENOS_OPEN_HOLDERS"]
 
 
+class AuditNodeIntake(unittest.TestCase):
+    """only an enrolled machine can make the audit node read a batch into memory, and the batch must be that
+    machine's; anyone else is turned away from the headers alone"""
+    def test_gate(self):
+        with tempfile.TemporaryDirectory() as d:
+            node = an.Node(os.path.join(d, "node"))
+            k = Ed25519PrivateKey.generate()
+            pub = base64.b64encode(k.public_key().public_bytes(serialization.Encoding.Raw,
+                                                               serialization.PublicFormat.Raw)).decode()
+            node.enroll("pc-1", pub)
+            g = lambda h: an.post_gate(node, h)[0]
+            self.assertEqual(g({"Content-Length": "100"}), 403)                              # no machine named
+            self.assertEqual(g({"X-Zenos-Machine": "pc-9", "Content-Length": "100"}), 403)   # not enrolled
+            self.assertEqual(g({"X-Zenos-Machine": "../x", "Content-Length": "100"}), 403)
+            self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": str(an.MAX_BODY + 1)}), 413)
+            self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": "x"}), 400)
+            self.assertEqual(g({"X-Zenos-Machine": "pc-1", "Content-Length": "100"}), 0)
+
+    def test_over_http(self):
+        import socket, threading, urllib.request, urllib.error
+        with tempfile.TemporaryDirectory() as d:
+            node = an.Node(os.path.join(d, "node"))
+            k = Ed25519PrivateKey.generate()
+            node.enroll("pc-1", base64.b64encode(k.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode())
+            s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+            import io, contextlib
+            with contextlib.redirect_stdout(io.StringIO()):
+                threading.Thread(target=an.serve, args=(node, "127.0.0.1", port, None, None, 3600),
+                                 daemon=True).start()
+                time.sleep(0.5)
+
+            def post(headers, body):
+                req = urllib.request.Request("http://127.0.0.1:%d/v1/batch" % port, data=body, method="POST",
+                                             headers=headers)
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        return r.status
+                except urllib.error.HTTPError as e:
+                    e.read(); e.close()
+                    return e.code
+            body = json.dumps({"machine": "pc-1", "chain": "guard", "from": 0, "records": []}).encode()
+            self.assertEqual(post({}, body), 403)
+            self.assertEqual(post({"X-Zenos-Machine": "pc-2"}, body), 403)
+            other = json.dumps({"machine": "pc-9", "chain": "guard", "from": 0, "records": []}).encode()
+            self.assertEqual(post({"X-Zenos-Machine": "pc-1"}, other), 403)     # named one machine, sent another's
+            self.assertEqual(post({"X-Zenos-Machine": "pc-1"}, body), 403)      # its own, but unsigned
+
+
 class OpenHolders(unittest.TestCase):
     """the network stays cut while the process that received L4+ plaintext, or anything it started, is alive; the
     user's own flag file cannot lift it"""
