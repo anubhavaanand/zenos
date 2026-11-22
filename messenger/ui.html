@@ -1317,8 +1317,8 @@ $("tsend").innerHTML='<svg width="18" height="18" viewBox="0 0 24 24" fill="none
 (()=>{const cb=$("ttext").closest(".cb");cb.id="tcomp";cb.classList.add("tcomp");$("thold").appendChild(cb);$("ttext").placeholder="Reply…";})();
 boot();
 /* ---------- calls (WebRTC + LiveKit SFU, E2E key via libsignal) ---------- */
-let callRoom=null;var calFrom=null;let callJoinedAt=0;const seenKeys=new Set();
-setInterval(()=>{if(!$("callov").classList.contains("on"))return;all.filter(m=>m.kind==="callkey"&&m.ev&&m.dir!=="out"&&m.ev.room===callRoom&&!seenKeys.has(m.id||m.t)&&(Date.parse(String(m.t||"").replace(" ","T"))||Date.now())>=callJoinedAt-5000).forEach(m=>{seenKeys.add(m.id||m.t);ZCall.applyKey(m.ev.key,m.ev.idx,3000);});},1000);
+let callRoom=null,callTg=null;var calFrom=null;let callJoinedAt=0;const seenKeys=new Set();
+setInterval(()=>{if(!$("callov").classList.contains("on"))return;const kctx={room:callRoom,me:me.id,target:callTg,members:(ZCall.info().members||[]).map(accOf)};all.filter(m=>ZCall.keyMessageOk(m,kctx)&&!seenKeys.has(m.id||m.t)&&(Date.parse(String(m.t||"").replace(" ","T"))||Date.now())>=callJoinedAt-5000).forEach(m=>{seenKeys.add(m.id||m.t);ZCall.applyKey(m.ev.key,m.ev.idx,3000);});},1000);
 const callTarget=()=>cur?(cur.type==="dm"?{to:cur.id}:{ch:cur.id}):null;
 function callState(){if(!cur)return null;const ms=all.filter(m=>m.kind==="call"&&m.ev&&(cur.type==="dm"?(!m.ch&&m.peer===cur.id):m.ch===cur.id));const l=ms[ms.length-1];return l&&l.ev.status==="start"?l:null;}
 function updCallBar(){const bar=$("callbar");const l=view==="conv"?callState():null;if(!l||$("callov").classList.contains("on")){bar.style.display="none";return;}
@@ -1331,7 +1331,7 @@ function closeCall(){callPanel=null;screenOwner=null;$("callov").classList.remov
 async function enterCall(kind){
   $("err").textContent="";
   if(!window.ZCall||!ZCall.supported()){$("err").textContent="This browser cannot make calls (no WebRTC). Use your phone for now — the desktop call app is coming.";return;}
-  const tg=callTarget();if(!tg)return;
+  const tg=callTarget();if(!tg)return;callTg=tg;
   const r=await fetch("/api/call/"+kind,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...tg,level:Number($("level").value)||1,video:true})}).then(x=>x.json());
   if(r.error){$("err").textContent=r.error;return;}
   all.filter(m=>m.kind==="callkey").forEach(m=>seenKeys.add(m.id||m.t));callJoinedAt=Date.now();

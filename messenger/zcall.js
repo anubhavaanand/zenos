@@ -110,6 +110,18 @@
       mic: lp.isMicrophoneEnabled, cam: lp.isCameraEnabled, keyIndex: keyIdx, members: members(),
       remote: [...room.remoteParticipants.values()].map((p) => ({ id: p.identity, encrypted: p.isEncrypted, tracks: [...p.trackPublications.values()].filter((t) => t.track).map((t) => t.kind) })) };
   }
+  // A call key arriving in a message is used only if it is for this call, comes from someone in the call who belongs
+  // to its conversation (the DM's other person, or a member writing in the call's channel), and has the shape of a key
+  // (32 bytes, index 0-15). Anyone else who can message you cannot switch, and so cut off, your call.
+  function keyMessageOk(m, ctx) {
+    if (!m || m.kind !== "callkey" || m.dir === "out" || !m.ev || !ctx || !ctx.room || m.ev.room !== ctx.room) return false;
+    const from = m.from || m.peer, tg = ctx.target || {};
+    if (!from || from === ctx.me || !(ctx.members || []).includes(from)) return false;
+    if (tg.ch ? m.ch !== tg.ch : (m.ch || from !== tg.to)) return false;
+    const k = String(m.ev.key || "");
+    let n = -1; try { n = /^[A-Za-z0-9+/]{43}=$/.test(k) ? atob(k).length : -1; } catch (_) { n = -1; }
+    return n === 32 && Number.isInteger(m.ev.idx) && m.ev.idx >= 0 && m.ev.idx <= 15;
+  }
   async function applyKey(keyB64, idx, delayMs) {
     if (!kp) return;
     await kp.addKey(b64(keyB64), idx, false);
@@ -136,5 +148,5 @@
   }
   async function screen(on) { if (!room) return false; await room.localParticipant.setScreenShareEnabled(!!on); return room.localParticipant.isScreenShareEnabled; }
   const canScreen = () => !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
-  window.ZCall = { join, leave, toggle, info, screen, canScreen, applyKey, devices, switchDevice, setMode, mode: () => mode, supported: () => typeof RTCPeerConnection !== "undefined" && LK && LK.isE2EESupported && LK.isE2EESupported() };
+  window.ZCall = { join, leave, toggle, info, screen, canScreen, applyKey, keyMessageOk, devices, switchDevice, setMode, mode: () => mode, supported: () => typeof RTCPeerConnection !== "undefined" && LK && LK.isE2EESupported && LK.isE2EESupported() };
 })();

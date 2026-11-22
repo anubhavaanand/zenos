@@ -20,8 +20,8 @@ jobs:
         run: python3 -W error::ResourceWarning -m unittest discover -s tests -v
       - name: Refusal of distrusted CA certificates (Node)
         run: node tests/messenger_distrust.js && node tests/messenger_distrust_learned.js
-      - name: Messenger device binding and push addresses
-        run: npm ci && node ../tests/messenger_binding.js && node ../tests/messenger_pushsub.js
+      - name: Messenger device binding, push addresses, call keys
+        run: npm ci && node ../tests/messenger_binding.js && node ../tests/messenger_pushsub.js && node ../tests/messenger_callkey.js
         working-directory: messenger
       - name: Messenger across organizations (two relays, signed member list, alerts, two clients)
         run: node tests/messenger_federation.js && node tests/messenger_federation_clients.js
