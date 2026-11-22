@@ -21,7 +21,26 @@
     "wrong-phone-page": "Approve only from ZENOS Messages on your phone.",
     "bad-key-envelope": "The key could not be passed to the PC. Try again.",
     "wrong-phone-key": "This password was saved with another phone.",
+    "tampered": "This request did not match what your phone would sign. Nothing was released. Tell your administrator.",
   };
+
+  // What the passkey signs is the digest of the request's core (zenos_credd.py core()/digest(): Python json.dumps with
+  // sort_keys, no spaces, ensure_ascii). The phone works it out itself, so the site, account and keys it shows and uses
+  // are the ones signed, whatever the process in between hands it.
+  const pyStr = (v) => JSON.stringify(String(v)).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+  const pyJson = (o) => "{" + Object.keys(o).sort().map((k) => pyStr(k) + ":" + (typeof o[k] === "number" ? String(o[k]) : pyStr(o[k]))).join(",") + "}";
+  const CORE = ["account", "created", "id", "kind", "origin", "salt", "server_key", "user", "v"];
+  async function checked(p) {
+    const c = p && p.core;
+    if (!c || typeof c !== "object" || Object.keys(c).sort().join() !== CORE.join() || c.v !== 1 || !Number.isSafeInteger(c.created)
+        || CORE.some((k) => k !== "v" && k !== "created" && typeof c[k] !== "string")) return null;
+    const dig = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(pyJson(c))));
+    if (b64u(dig) !== String(p.challenge) || c.id !== p.id) return null;
+    const codes = (Array.isArray(p.codes) ? p.codes : []).map(Number);
+    if (codes.length !== 3 || codes.some((n) => !Number.isInteger(n) || n < 0 || n > 99)) return null;
+    // the rest comes from the signed core, never from beside it
+    return { ...p, kind: c.kind, origin: c.origin, account: c.account, created: c.created, salt: c.salt, server_key: c.server_key, codes };
+  }
 
   // the entry's key, encrypted to this request's one-time key (ECDH P-256, HKDF-SHA-256, AES-GCM bound to the digest)
   async function envelope(p, prf) {
@@ -68,9 +87,13 @@
     if (!me || !me.remote || busy) return;
     const r = await api("cred/pending").catch(() => null);
     if (!r) return;
-    const p = (r.pending || []).find((x) => !gone.has(x.id));
-    if (!p && !note) { cur = null; sig = ""; sheet().style.display = "none"; return; }
-    if (p && (!cur || cur.id !== p.id) && !note) { cur = p; draw(); }
+    const raw = (r.pending || []).find((x) => !gone.has(x.id));
+    if (!raw && !note) { cur = null; sig = ""; sheet().style.display = "none"; return; }
+    if (raw && (!cur || cur.id !== raw.id) && !note) {
+      const p = await checked(raw);
+      if (!p) { gone.add(raw.id); note = { ok: false, text: MSG.tampered }; draw(); return; }
+      cur = p; draw();
+    }
   }
 
   function draw() {

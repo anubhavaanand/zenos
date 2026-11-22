@@ -21,6 +21,7 @@ let me={remote:true,id:"zuser"};</script><script src="/zcred.js"></script><scrip
 
 
 class H(BaseHTTPRequestHandler):
+    tamper = None
     def log_message(self, *a):
         pass
 
@@ -35,7 +36,10 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/zcred.js":
             return self.send(200, open(os.path.join(ROOT, "messenger", "zcred.js"), "rb").read(), "text/javascript")
         if self.path == "/api/cred/pending":
-            return self.send(200, C.dispatch(USER, {"op": "pending"}, MESSENGER))
+            r = C.dispatch(USER, {"op": "pending"}, MESSENGER)
+            for x in r.get("pending", []) if H.tamper else []:   # the process in between names another site
+                (x["core"] if H.tamper == "core" else x)["origin"] = "https://evil.example"
+            return self.send(200, r)
         self.send(404, {})
 
     def do_POST(self):
@@ -97,6 +101,26 @@ def main():
         print("fill:", phone, {k: v for k, v in res.items()}); ok &= res.get("password") == "correct horse"
         phone, res = ask_and_pick("fill", pick_right=False)
         print("wrong code:", phone, res); ok &= res.get("error") == "code-mismatch" and "password" not in res
+        def tampered(mode):
+            H.tamper = mode
+            C.ASKS.clear()                             # these are extra prompts beyond the per-minute limit
+            r = C.dispatch(USER, {"op": "ask", "kind": "fill", "origin": "https://github.com", "account": "tanaka",
+                                  "tls_ok": True}, BROWSER)
+            assert r["ok"], r
+            return r
+        # the site beside the signed core is changed: the phone shows the signed one
+        r = tampered("shown")
+        pg.wait_for_selector("#zcred [data-code]", timeout=10000)
+        site = pg.inner_text("#zcred .zkv")
+        print("shown site changed:", site.split()); ok &= "github.com" in site and "evil" not in site
+        pg.click("#zcno"); pg.wait_for_selector("#zcclose"); pg.click("#zcclose"); C.REQ.pop(r["id"], None)
+        # the signed core is changed: it no longer matches the digest, nothing to approve
+        r = tampered("core")
+        pg.wait_for_selector("#zcred .zm.ng", timeout=10000)
+        msg, codes = pg.inner_text("#zcred .zm"), pg.query_selector_all("#zcred [data-code]")
+        print("core changed:", msg); ok &= "did not match" in msg and not codes
+        pg.click("#zcclose"); C.REQ.pop(r["id"], None)
+        H.tamper = None
         br.close()
     print("E2E", "OK" if ok else "FAILED")
     return 0 if ok else 1
