@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Self-audit run 4, before 0.2.1 (a quick scoped run over the code changed since run 3, and the messenger's
+  federation code in full): 17 candidates, all fixed with tests in the source; what each one was is published with
+  0.2.1 ([docs/SELF_AUDIT.md](docs/SELF_AUDIT.md)). Operators: update the PCs before the audit nodes. A PC now proves its
+  key before the node reads its batch, and an updated node refuses batches from PCs that do not.
+  Pre-filed plans are now approved for one PC (plans filed before the update are not honoured; file them again).
+  Release officers type 16 characters of the SHA-256 (or of a mitigation's record digest) to sign.
+  While an L4+ file is open, the account holding it sends nothing, not even on connections opened before.
+
 - Weaknesses found while fixing those of self-audit run 3, in the same parts of the code (the messenger and its
   relay, phone sign-in, calls, push notifications, federation, the key agent and network sentinel, the audit node,
   the key service and the vulnerability watch), are fixed with tests (22 Nov 2026). What each one was is published

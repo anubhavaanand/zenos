@@ -57,4 +57,15 @@ reading the source, all fixed with tests; 4 further points tightened. One hunter
 federation code was cut short and goes into the next run. Which ones they were is published here once a release
 carries the fixes.
 
+## Run 4 (source at `ce17f1e`, before 0.2.1; fixed in the source, 22 Nov 2026)
+
+The run before a release, as a quick scoped pass: the code changed since run 3, plus the messenger's federation code in
+full (cut short in run 3). Four reconnaissance agents, five hunters (messenger server, messenger page, root services,
+release and CI, server side and app shell), one final coverage critic and five verifiers, none of which had hunted
+what it checked. No code was run inside the audit (the sandbox's memory and disk limits could not be enforced in the
+environment it ran in), so the verifiers kept all 17 candidates as needing validation, with exact blockers, rather
+than confirming any. All 17 are fixed in the source with tests; for eight, the test written for the fix fails on the
+audited source. Six further areas in scope that the critic named go into the next run. Which ones they were is
+published here once a release carries the fixes.
+
 Changes others may notice are in the [CHANGELOG](../CHANGELOG.md) under 0.2.0.
