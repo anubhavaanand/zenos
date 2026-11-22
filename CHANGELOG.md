@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+## 0.2.1 Developer Preview (published 2026-11-23)
+
+- What self-audit runs 2, 3 and 4 found, and the weaknesses found while fixing run 3, are published in
+  [docs/SELF_AUDIT.md](docs/SELF_AUDIT.md): 0.2.1 carries all their fixes.
+
 - Self-audit run 4, before 0.2.1 (a quick scoped run over the code changed since run 3, and the messenger's
-  federation code in full): 17 candidates, all fixed with tests in the source; what each one was is published with
-  0.2.1 ([docs/SELF_AUDIT.md](docs/SELF_AUDIT.md)). Operators: update the PCs before the audit nodes. A PC now proves its
+  federation code in full): 17 candidates, all fixed with tests ([docs/SELF_AUDIT.md](docs/SELF_AUDIT.md)). Operators: update the PCs before the audit nodes. A PC now proves its
   key before the node reads its batch, and an updated node refuses batches from PCs that do not.
   Pre-filed plans are now approved for one PC (plans filed before the update are not honoured; file them again).
   Release officers type 16 characters of the SHA-256 (or of a mitigation's record digest) to sign.
@@ -12,8 +16,7 @@
 
 - Weaknesses found while fixing those of self-audit run 3, in the same parts of the code (the messenger and its
   relay, phone sign-in, calls, push notifications, federation, the key agent and network sentinel, the audit node,
-  the key service and the vulnerability watch), are fixed with tests (22 Nov 2026). What each one was is published
-  with the release that carries them. The key agent's unit no longer sets `ProtectControlGroups=yes`: it puts a
+  the key service and the vulnerability watch), are fixed with tests (22 Nov 2026; [docs/SELF_AUDIT.md](docs/SELF_AUDIT.md)). The key agent's unit no longer sets `ProtectControlGroups=yes`: it puts a
   process given L4+ plaintext in a cgroup of its own under `/sys/fs/cgroup/zenos-holders`, so the network sentinel
   sees everything that process starts.
 
@@ -24,8 +27,7 @@
   service ([docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)).
 
 - Self-audit run 3 of at least 3: 10 weaknesses confirmed and 7 more found by reading the source, all fixed with
-  tests; 4 further points the run raised were tightened too. What each one was is published once a release carries
-  the fixes ([SECURITY.md](SECURITY.md), [docs/SELF_AUDIT.md](docs/SELF_AUDIT.md)).
+  tests; 4 further points the run raised were tightened too ([docs/SELF_AUDIT.md](docs/SELF_AUDIT.md)).
 - Operators of the server side: the audit node now answers questions about PCs (health, opening history) only to an
   enrolled reader. Enroll the key service once with `zenos_auditnode.py --enroll-reader keysvc <key>`
   ([docs/KEY_SERVICE.md](docs/KEY_SERVICE.md)); until then the key service releases no keys.
@@ -33,8 +35,7 @@
   own copy of the package (`--deb`), or asks for the start of its SHA-256.
 
 - Self-audit run 2 of at least 3 (Cloudflare's security-audit-skill): 21 confirmed weaknesses (fixed with tests) and 7
-  further ones the run pointed at (fixed too), all in the source. What each one was is published once a release carries the
-  fixes ([SECURITY.md](SECURITY.md), [docs/SELF_AUDIT.md](docs/SELF_AUDIT.md)).
+  further ones the run pointed at (fixed too), all fixed ([docs/SELF_AUDIT.md](docs/SELF_AUDIT.md)).
 
 - The password vault serves only a browser or messenger that the new root launcher `zenos-launchd` started; it
   records each start (pid, start time, person, program), and other programs of the same person cannot attach to
