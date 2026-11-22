@@ -74,6 +74,12 @@ async function signed(dev, url, method, p, obj) { const raw = obj ? JSON.stringi
     const [s] = await j(r.url + "/fed/config", "POST", { org, url: r.url, max_level: 5, members }, ad); check(org + ": configured by its administrator", s === 200);
   }
   let [s0] = await j(B.url + "/fed/config", "POST", { org: "evil.example", url: "http://x" }); check("configuration refused without the administrator", s0 === 403);
+  // before a body is read: a listed organization, a recent request, a size its kind needs
+  const pre = async (hdr, body) => (await fetch(B.url + "/fed/deliver", { method: "POST", headers: { "Content-Type": "application/json", "X-Zenos-Relay": hdr }, body })).status;
+  check("an unlisted organization's body is not read", (await pre(`evil.example ${Date.now()} x`, "x".repeat(3 << 20))) === 403);
+  check("an old request's body is not read", (await pre(`ministry.example ${Date.now() - 3600e3} x`, "{}")) === 403);
+  check("a body larger than a message needs is refused", (await pre(`ministry.example ${Date.now()} x`, "x".repeat(3 << 20))) === 413);
+  check("the relay keeps running", (await fetch(B.url + "/trust")).ok);
 
   // people: alice at the ministry, bob at the city
   const alice = device("alice"), bob = device("bob");
@@ -116,7 +122,7 @@ async function signed(dev, url, method, p, obj) { const raw = obj ? JSON.stringi
   const me = (org, keyFile) => ({ org, sign: F.signer(keyFile).sign });
   const cKey = path.join(C.HOME, ".local/share/zenos/msg/relay/relay-key.pem"), aKey = path.join(A.HOME, ".local/share/zenos/msg/relay/relay-key.pem");
   r = await F.relayRequest(me("rogue.example", cKey), B.url, "POST", "/fed/deliver", { mbx: bob.intro.id, body: env, level: 1 });
-  check("delivery from the rogue relay refused (no valid entry, so no key to check it against)", r.status === 403 && /signature|unlisted/.test(r.body.error), r);
+  check("delivery from the rogue relay refused (no valid entry, so no key to check it against)", r.status === 403 && /signature|unlisted|not a listed organization/.test(r.body.error), r);
   r = await F.relayRequest(me("ministry.example", cKey), B.url, "POST", "/fed/deliver", { mbx: bob.intro.id, body: env, level: 1 });
   check("a relay claiming to be the ministry with another key: refused (signature)", r.status === 403 && /signature/.test(r.body.error), r);
   const p = "/fed/deliver", rawB = JSON.stringify({ mbx: bob.intro.id, body: await sealed("second"), level: 1 }), ts = String(Date.now());

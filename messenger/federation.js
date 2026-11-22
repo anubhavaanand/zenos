@@ -114,7 +114,24 @@ function federation(ctx) {
     const d = decide(decideReq(cfg.org, to, kind, level, true, true));
     return d.allow ? { ...d, entry: entryOf(to) } : d;
   }
-  async function rawBody(req) { const c = []; let n = 0; for await (const x of req) { n += x.length; if (n > 30 * 1024 * 1024) throw new Error("too large"); c.push(x); } return Buffer.concat(c).toString("utf8"); }
+  // Before a body is read: the request names a listed organization, is recent, and is no larger than its kind needs.
+  // The signature (over the body) is checked after, in inbound().
+  const BODY_MAX = { message: 2 * 1024 * 1024, alert: 1024 * 1024 };
+  function preflight(req, kind) {
+    const [from, ts] = String(req.headers["x-zenos-relay"] || "").split(" ");
+    if (!cfg || !cfg.org) return "federation is not set up on this relay";
+    if (!ORG.test(from || "") || !entryOf(from)) return "not a listed organization";
+    if (!(Math.abs(Date.now() - Number(ts)) < 300e3)) return "stale";
+    if (Number(req.headers["content-length"] || 0) > BODY_MAX[kind]) return "too large";
+    return null;
+  }
+  async function rawBody(req, max) { const c = []; let n = 0; for await (const x of req) { n += x.length; if (n > max) throw new Error("too large"); c.push(x); } return Buffer.concat(c).toString("utf8"); }
+  async function signedBody(req, res, kind) {
+    const why = preflight(req, kind);
+    if (why) { ctx.audit("fed-refused", { reason: why, kind }); req.resume(); send0(res, why === "too large" ? 413 : 403, { error: "Not allowed: " + why }); return null; }
+    try { return await rawBody(req, BODY_MAX[kind]); } catch { send0(res, 413, { error: "Not allowed: too large" }); return null; }
+  }
+  const send0 = (res, code, obj) => ctx.send(res, code, obj);
 
   function validAlert(a) {
     if (!a || typeof a !== "object") return "not an alert";
@@ -173,7 +190,8 @@ function federation(ctx) {
       return send(res, r.status, r.body), true;
     }
     if (req.method === "POST" && parts[0] === "fed" && parts[1] === "deliver") {
-      const raw = await rawBody(req); let b; try { b = JSON.parse(raw); } catch { return send(res, 400, { error: "bad json" }), true; }
+      const raw = await signedBody(req, res, "message"); if (raw === null) return true;
+      let b; try { b = JSON.parse(raw); } catch { return send(res, 400, { error: "bad json" }), true; }
       const d = inbound(req, raw, "message", b.level);
       if (!d.allow) { ctx.audit("fed-refused", { from_org: d.from || null, reason: d.reason }); return send(res, 403, { error: "Not allowed: " + d.reason }), true; }
       const r = await ctx.deliverSealed(b.mbx, b.uak, b.body);
@@ -232,7 +250,8 @@ function federation(ctx) {
 
     // ---- disaster alerts
     if (req.method === "POST" && parts[0] === "fed" && parts[1] === "alert") {
-      const raw = await rawBody(req); let a; try { a = JSON.parse(raw); } catch { return send(res, 400, { error: "bad json" }), true; }
+      const raw = await signedBody(req, res, "alert"); if (raw === null) return true;
+      let a; try { a = JSON.parse(raw); } catch { return send(res, 400, { error: "bad json" }), true; }
       const d = inbound(req, raw, "alert", 1);
       if (!d.allow) { ctx.audit("fed-refused", { from_org: d.from || null, reason: d.reason, kind: "alert" }); return send(res, 403, { error: "Not allowed: " + d.reason }), true; }
       const bad = validAlert(a); if (bad) return send(res, 400, { error: "alert: " + bad }), true;
