@@ -79,6 +79,22 @@ class KeyService(unittest.TestCase):
         self.svc.presence_from, self.svc.rate_max, self.svc.machine_rate_max = 6, 1000, 1000
         self.svc.rates.clear()
 
+    def test_rate_counts_do_not_pile_up(self):
+        now = time.time()
+        for i in range(500):                      # asked about many keys that never had a release
+            self.assertEqual(self.svc.recent((MACHINE, f"user{i}", "open"), now), 0)
+        self.assertEqual(len(self.svc.rates), 0)
+        old = zenos_keysvc.RATES_SWEEP
+        try:
+            zenos_keysvc.RATES_SWEEP = 10
+            for i in range(10):
+                self.svc.note_release((MACHINE, f"u{i}", "open"), now - 3600)
+            self.svc.note_release((MACHINE, self.user, "open"), now)
+            self.assertEqual(list(self.svc.rates), [(MACHINE, self.user, "open")])
+            self.assertEqual(self.svc.recent((MACHINE, self.user, "open"), now), 1)
+        finally:
+            zenos_keysvc.RATES_SWEEP = old
+
     def healthy(self, seen=None, services="active", halted=False):
         m = self.audit / "machines"
         (m / f"{MACHINE}.seen").write_text(str(seen if seen is not None else time.time()))

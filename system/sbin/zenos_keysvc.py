@@ -48,6 +48,7 @@ PAGES = Path(os.environ.get("ZENOS_KEYSVC_PAGES",
 FID = re.compile(r"^[0-9a-f]{32}$")
 CHALLENGE_TTL = 120
 MAX_CHALLENGES = 50          # open challenges per PC
+RATES_SWEEP = 4096          # past this many counted keys, ones with nothing inside the window are dropped
 SEALED_WINDOW = 600          # seconds after the key is issued within which the PC names the finished file
 
 
@@ -312,13 +313,20 @@ class Service:
         return float(h.get("last_seen") or 0), h.get("services_ok") is True, h.get("halted") is True
 
     def recent(self, key, now):
+        """releases for this key inside the window; a key with none left is not kept"""
         with self.lock:
             log = [t for t in self.rates.get(key, []) if now - t <= self.rate_window]
-            self.rates[key] = log
+            if log:
+                self.rates[key] = log
+            else:
+                self.rates.pop(key, None)
             return len(log)
 
     def note_release(self, key, now):
         with self.lock:
+            if len(self.rates) >= RATES_SWEEP:
+                for k in [k for k, v in self.rates.items() if not v or now - v[-1] > self.rate_window]:
+                    del self.rates[k]
             self.rates.setdefault(key, []).append(now)
 
     def grant_facts(self, g):
