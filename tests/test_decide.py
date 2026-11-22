@@ -5,6 +5,7 @@ as the services expect, that the services' own tables agree with it, and that an
 Build it first: cd formal && lake build.
 """
 import importlib, os, sys, unittest
+os.environ["ZENOS_SENTINEL_UNIT"] = "/nonexistent/zenos-netsentinel.service"   # a developer machine may have the real unit: keyd here does not wait for it
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../system/lib"))
 import zdecide, zformat
 

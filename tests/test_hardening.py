@@ -2,6 +2,7 @@
 window for kernel fixes, and what the audit node learns from a PC's signed status (system/sbin/zenos_auditship.py,
 zenos_auditnode.py, zenos_restartwindow.py). The audit node's chain check runs zenos-decide: cd formal && lake build."""
 import base64, hashlib, json, os, sys, tempfile, time, unittest
+os.environ["ZENOS_SENTINEL_UNIT"] = "/nonexistent/zenos-netsentinel.service"   # a developer machine may have the real unit: keyd here does not wait for it
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "../system/sbin"))
@@ -204,6 +205,7 @@ class CutBeforePlaintext(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             unit = os.path.join(d, "zenos-netsentinel.service"); open(unit, "w").close()
             cut = os.path.join(d, "open-cut.json")
+            saved = {k: os.environ.get(k) for k in ("ZENOS_SENTINEL_UNIT", "ZENOS_OPEN_CUT")}
             os.environ.update(ZENOS_SENTINEL_UNIT=unit, ZENOS_OPEN_CUT=cut)
             try:
                 import zenos_keyd as K
@@ -228,8 +230,12 @@ class CutBeforePlaintext(unittest.TestCase):
                 os.remove(unit)
                 self.assertTrue(K.cut_confirmed(1000, since=t0, wait=0.2))            # no sentinel installed (development)
             finally:
-                for k in ("ZENOS_SENTINEL_UNIT", "ZENOS_OPEN_CUT"):
-                    os.environ.pop(k, None)
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+                importlib.reload(K)
 
     def test_the_cut_drops_the_holders_established_connections(self):
         import zenos_openguard as og

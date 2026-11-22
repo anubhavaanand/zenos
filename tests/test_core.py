@@ -1,6 +1,7 @@
 """Core tests: sealed files, request digests (Python = browser), officer enrollment and the guard's approval checks.
 Run: python3 -m unittest discover -s tests   (no root, no network; everything happens in a temporary home)"""
 import base64, hashlib, json, os, re, shutil, subprocess, sys, tempfile, time, unittest
+os.environ["ZENOS_SENTINEL_UNIT"] = "/nonexistent/zenos-netsentinel.service"   # a developer machine may have the real unit: keyd here does not wait for it
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent

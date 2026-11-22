@@ -1,6 +1,7 @@
 """The key service: sealed files whose key is not on the PC.
 Run: python3 -m unittest discover -s tests   (no root; the service runs on 127.0.0.1 in this process)"""
 import base64, hashlib, importlib, json, os, pwd, socket, sys, tempfile, threading, time, unittest
+os.environ["ZENOS_SENTINEL_UNIT"] = "/nonexistent/zenos-netsentinel.service"   # a developer machine may have the real unit: keyd here does not wait for it
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
