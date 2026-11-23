@@ -11,6 +11,7 @@ const THREADS = [
   { id: "family", group: "Editions", edition: "family", about: "ZENOS Family: for a household, with parents' approvals." },
   { id: "personal", group: "Editions", edition: "personal", about: "ZENOS Personal: for one person." },
   { id: "github", group: "From the project", view: "github", about: "What happens in the repository: releases, merged changes, pull requests, who offered to take an issue, comments from contributors, issues opened and closed, milestones." },
+  { id: "security-watch", group: "From the project", staff: true, about: "Cyberattacks and vulnerabilities reported in the US and Asia, collected twice a day. Each item links its source; serious ones say how urgent they are and what to do. Anyone signed in can comment." },
   { id: "release-notes", group: "From the project", staff: true, about: "What changed, and which threads it came from." },
   { id: "accepted", group: "From the project", view: "accepted", about: "Proposals a maintainer accepted, and where they are." },
   { id: "roadmap", group: "From the project", staff: true, about: "What the project plans next." },
@@ -100,11 +101,15 @@ async function limited(env, user) {
 
 // ---------- what the page sees (no session ids, no internal user ids beyond the handle)
 const statusOf = (pr) => pr.status === "proposed" && pr.route === "fork" ? "fork idea" : pr.status;
+// a security-watch item ends with the address of its source: one https URL, no credentials, nothing else on the line
+const watchLink = (u) => { try { const x = new URL(u); return x.protocol === "https:" && !x.username && !x.password && u.length <= 500 && !/\s/.test(u); } catch (e) { return false; } };
 function viewPost(p, me, admin) {
   const who = { name: p.uname || "Someone", handle: p.uhandle || "", staff: !!p.staff };
   if (p.hidden && !admin && !(me && me.id === p.user))
     return { id: p.id, thread: p.thread, edition: "", text: "", held: p.held || "Held for a maintainer.", at: p.at, ...who, ai: "", proposal: null, metoo: 0, mine: false, replies: 0 };
-  return { id: p.id, thread: p.thread, edition: p.edition || "", text: p.text, at: p.at, ...who, ai: p.ai || "",
+  let text = p.text, link = "";
+  if (p.thread === "security-watch" && p.user === "watch") { const i = text.lastIndexOf("\n"); const l = i >= 0 ? text.slice(i + 1) : ""; if (watchLink(l)) { link = l; text = text.slice(0, i); } }
+  return { id: p.id, thread: p.thread, edition: p.edition || "", text, link, at: p.at, ...who, ai: p.ai || "",
     proposal: p.proposal ? { id: p.proposal, status: statusOf({ status: p.pstatus, route: p.proute }) } : null,
     metoo: p.metoo || 0, mine: !!p.mine, replies: p.replies || 0, held: p.hidden ? (p.held || "Held for a maintainer.") : "", byAI: !!p.byai };
 }
@@ -224,6 +229,27 @@ async function api(req, env, ctx) {
   const u = new URL(req.url), p = u.pathname;
   if (p === "/auth/github/start") return env.GITHUB_CLIENT_ID ? ghStart(env) : text(404, "GitHub sign-in is not set up on this server.");
   if (p === "/auth/github/callback") return ghCallback(env, u, req);
+  // the security watch (the AI's twice-daily collection): its own token, this one endpoint, the security-watch thread only
+  if (p === "/api/watch/post") {
+    const t = (req.headers.get("authorization") || "").replace(/^Bearer /, "");
+    if (!env.WATCH_TOKEN || !same(t, env.WATCH_TOKEN)) return json(403, { error: "watch only" });
+    if (req.method !== "POST") return json(404, { error: "not found" });
+    const b = await req.json().catch(() => ({}));
+    const title = String(b.title || "").replace(/\s+/g, " ").trim(), body = String(b.text || "").trim();
+    const link = String(b.link || "").trim(), level = b.level === "serious" ? "serious" : "info";
+    if (title.length < 5 || title.length > 200) return json(400, { error: "title: 5 to 200 characters" });
+    if (body.length > 6000) return json(400, { error: "text: up to 6000 characters" });
+    if (!watchLink(link)) return json(400, { error: "link: one https address of the source" });
+    const day = await one(env.DB, "SELECT COUNT(*) n FROM posts WHERE thread = 'security-watch' AND at > ?", Date.now() - 86400000);
+    if (day && day.n >= 60) return json(429, { error: "60 items a day at most" });
+    const tail = "\n" + link;   // the source is the item's last line: compare it exactly (no LIKE wildcards)
+    const dup = await one(env.DB, "SELECT id FROM posts WHERE thread = 'security-watch' AND user = 'watch' AND substr(text, -?) = ? AND at > ?", tail.length, tail, Date.now() - 30 * 86400000);
+    if (dup) return json(200, { ok: true, id: dup.id, duplicate: true });
+    await run(env.DB, "INSERT OR IGNORE INTO users (id, handle, name, via, joined, young, banned) VALUES ('watch', '@zenos', 'ZENOS security watch', 'staff', ?, 0, 0)", Date.now());
+    const text = (level === "serious" ? "[Serious] " : "") + title + (body ? "\n\n" + body : "") + "\n" + link;
+    const r = await one(env.DB, "INSERT INTO posts (thread, text, at, user, staff, reviewed, byai) VALUES ('security-watch', ?, ?, 'watch', 1, 1, 1) RETURNING id", text, Date.now());
+    return json(200, { ok: true, id: r.id });
+  }
   // the reviewer (the AI's scheduled review): its own token, only these two endpoints
   if (p.startsWith("/api/review/")) {
     const t = (req.headers.get("authorization") || "").replace(/^Bearer /, "");

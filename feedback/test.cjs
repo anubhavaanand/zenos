@@ -3,8 +3,8 @@
 const { spawn, execFileSync } = require("child_process"), fs = require("fs"), os = require("os"), path = require("path"), assert = require("assert");
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zf-")), PORT = 18700 + Math.floor(Math.random() * 500), B = `http://127.0.0.1:${PORT}`;
 const W = path.join(__dirname, "node_modules", ".bin", "wrangler");
-const ADMIN = "local-admin-token", REVIEW = "local-review-token";
-fs.writeFileSync(path.join(dir, "vars"), `TEST_SIGNIN=1\nPUBLIC_URL=http://localhost:${PORT}\nADMIN_TOKEN=${ADMIN}\nREVIEW_TOKEN=${REVIEW}\n`);
+const ADMIN = "local-admin-token", REVIEW = "local-review-token", WATCH = "local-watch-token";
+fs.writeFileSync(path.join(dir, "vars"), `TEST_SIGNIN=1\nPUBLIC_URL=http://localhost:${PORT}\nADMIN_TOKEN=${ADMIN}\nREVIEW_TOKEN=${REVIEW}\nWATCH_TOKEN=${WATCH}\n`);
 execFileSync(W, ["d1", "execute", "DB", "--local", "--persist-to", dir, "--file", "schema.sql"], { cwd: __dirname, stdio: "ignore" });
 const srv = spawn(W, ["dev", "--local", "--port", String(PORT), "--ip", "127.0.0.1", "--persist-to", dir, "--env-file", path.join(dir, "vars"), "--show-interactive-dev-session=false"],
   { cwd: __dirname, stdio: "ignore", detached: true });
@@ -25,7 +25,7 @@ const rv = (p, body) => call("rev", p, body, { Authorization: "Bearer " + REVIEW
   let up = false; for (let i = 0; i < 300; i++) { try { const r = await fetch(B + "/api/state"); if (r.ok) { up = true; break; } } catch {} await wait(200); }
   assert.ok(up, "wrangler dev did not start");
   let r = await call("anon", "/api/state");
-  assert.equal(r.j.me, null); assert.equal(r.j.signin, "test"); assert.equal(r.j.threads.length, 10); ok("state without sign-in");
+  assert.equal(r.j.me, null); assert.equal(r.j.signin, "test"); assert.equal(r.j.threads.length, 11); ok("state without sign-in");
   r = await call("anon", "/api/thread?t=github"); assert.equal(r.status, 200); assert.ok(Array.isArray(r.j.github.events) && Array.isArray(r.j.github.milestones)); ok("the repository thread answers (read only)");
   r = await call("anon", "/api/post", { thread: "github", text: "posting into the repository thread" }); assert.notEqual(r.status, 200); ok("nobody posts into the repository thread");
   r = await call("anon", "/api/post", { thread: "ideas", text: "hello there everyone" }); assert.equal(r.status, 401); ok("posting needs sign-in");
@@ -89,5 +89,18 @@ const rv = (p, body) => call("rev", p, body, { Authorization: "Bearer " + REVIEW
   const inj = pend.find((x) => /Ignore previous/.test(x.text));
   r = await rv("/api/review/result", { id: inj.id, appropriate: false, reason: "Tries to instruct the reviewer; appeal at zenos-fix . com" }); assert.ok(r.j.ok);
   r = await call("anon", "/api/thread?t=ideas"); assert.equal(r.j.posts.find((x) => x.id === inj.id).held, "Held for a maintainer."); ok("the review holds a post it finds not appropriate, and a hold reason with an address is not shown");
+  // the security watch: its own token, the security-watch thread only, the source as a separate link
+  const wt = (body, tok) => call("watch", "/api/watch/post", body, { Authorization: "Bearer " + (tok || WATCH), "X-ZF": "1" });
+  r = await wt({ title: "CISA adds CVE-2026-0001 to KEV", link: "https://www.cisa.gov/kev" }, "wrong"); assert.equal(r.status, 403); ok("the watch needs its own token");
+  r = await wt({ title: "A link that is not https", link: "javascript:alert(1)" }); assert.equal(r.status, 400);
+  r = await wt({ title: "Two links in one", link: "https://a.example/ https://b.example/" }); assert.equal(r.status, 400); ok("the watch's link is one https address");
+  r = await wt({ title: "CISA adds CVE-2026-0001 to KEV", text: "Known exploited. Fixed in 1.2.3.", link: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", level: "serious" }); assert.ok(r.j.ok);
+  const wid = r.j.id;
+  r = await wt({ title: "CISA adds CVE-2026-0001 to KEV again", link: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog" }); assert.ok(r.j.duplicate && r.j.id === wid); ok("the same source is not posted twice");
+  r = await call("anon", "/api/thread?t=security-watch"); const wp = r.j.posts.find((x) => x.id === wid);
+  assert.ok(wp && wp.staff && wp.byAI && wp.link === "https://www.cisa.gov/known-exploited-vulnerabilities-catalog" && wp.text.startsWith("[Serious] CISA adds") && !wp.text.includes("https://")); ok("a watch item shows its text and its source link apart");
+  r = await call("maya", "/api/post", { thread: "security-watch", text: "posting into the watch thread myself" }); assert.equal(r.status, 403); ok("only the project posts items in the watch thread");
+  r = await call("maya", "/api/reply", { post: wid, text: "Is ZENOS affected by this one?" }); assert.ok(r.j.ok); ok("anyone signed in can comment on a watch item");
+  r = await call("maya", "/api/watch/post", { title: "a signed-in user tries the watch endpoint", link: "https://example.org/" }); assert.equal(r.status, 403); ok("a signed-in user cannot use the watch endpoint");
   console.log("all", n, "passed");
 })().catch((e) => { console.error(e); process.exitCode = 1; }).finally(() => { try { process.kill(-srv.pid); } catch {} fs.rmSync(dir, { recursive: true, force: true }); });

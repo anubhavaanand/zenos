@@ -22,4 +22,4 @@ REVIEW_HOURS = "4"
 PER_HOUR = "5"
 PER_DAY = "20"
 GITHUB_CLIENT_ID = "Ov23liA5umG0pMTBx1UY"   # public identifier of the GitHub OAuth app (zenos-org)
-# secrets (wrangler secret put): GITHUB_CLIENT_SECRET, ADMIN_TOKEN, REVIEW_TOKEN
+# secrets (wrangler secret put): GITHUB_CLIENT_SECRET, ADMIN_TOKEN, REVIEW_TOKEN, WATCH_TOKEN (the security watch)

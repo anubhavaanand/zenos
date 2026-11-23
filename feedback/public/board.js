@@ -50,9 +50,9 @@ function postEl(p, small) {
   if (p.held && !p.text) return h("div", { cls: "post" }, avatar(p.handle), h("div", { cls: "pb" }, h("div", { cls: "ph" }, h("b", {}, p.name), h("span", {}, when(p.at))),
     h("div", { cls: "txt", style: "color:var(--t-mute);font-style:italic" }, "Held for a maintainer: " + p.held)));
   const kids = [h("div", { cls: "ph" }, h("b", {}, p.name), h("span", {}, (p.handle ? p.handle + " · " : "") + when(p.at)),
-    p.staff ? h("span", { cls: "tag staff" }, "project") : p.byAI ? h("span", { cls: "tag staff" }, "AI answer · not a maintainer decision") : p.edition ? h("span", { cls: "tag" }, p.edition) : null,
+    p.staff && p.byAI ? h("span", { cls: "tag staff" }, "project · written by AI") : p.staff ? h("span", { cls: "tag staff" }, "project") : p.byAI ? h("span", { cls: "tag staff" }, "AI answer · not a maintainer decision") : p.edition ? h("span", { cls: "tag" }, p.edition) : null,
     p.held ? h("span", { cls: "tag", style: "color:#F0C060;background:rgba(240,192,96,.16)" }, "Held: " + p.held) : null),
-    h("div", { cls: "txt" }, p.text)];
+    h("div", { cls: "txt" }, p.text), p.link ? h("a", { cls: "plink", href: p.link, target: "_blank", rel: "noopener noreferrer" }, "Source: " + p.link) : null];
   if (p.ai && p.proposal) kids.push(h("div", { cls: "ai", role: "button", tabindex: "0", title: "Open the proposal", on: { click: () => showProposal(p.proposal.id), keydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); showProposal(p.proposal.id); } } } },
     h("em", {}, "AI"), h("span", {}, p.ai), h("span", { cls: stCls(p.proposal.status), style: "flex:0" }, cap(p.proposal.status))));
   if (!small) {
