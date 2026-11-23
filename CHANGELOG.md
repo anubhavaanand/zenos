@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Four reports made through private security advisories (8 Nov 2026, by @anubhavaanand) are fixed with tests in the
+  source. Thank you. What each one was is published with the release that carries the fixes.
+
 ## 0.2.1 Developer Preview (published 2026-11-23)
 
 - What self-audit runs 2, 3 and 4 found, and the weaknesses found while fixing run 3, are published in

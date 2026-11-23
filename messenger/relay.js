@@ -228,6 +228,12 @@ const roomFor = (s) => crypto.createHash("sha256").update("zenos-call|" + s).dig
 const CALLCFG = path.join(DIR, "callservers.json");
 let callcfg = load(CALLCFG, null);
 if (!callcfg) { callcfg = { selected: "local", servers: { local: { name: "This PC (self-hosted LiveKit)", url: "", key: LKENV.LK_KEY || "", secret: LKENV.LK_SECRET || "", maxLevel: 5, kind: "local" } } }; fs.writeFileSync(CALLCFG, JSON.stringify(callcfg), { mode: 0o600 }); }
+// An external call server is whatever the address says it is: the relay cannot prove it runs ZENOS's LiveKit or keeps
+// metadata to itself. So it carries at most L2 calls, unless the host's root lists its host name in
+// /etc/zenos/call-servers.json {"trusted": ["calls.example.org"]} (GHSA-g59c-684x-c9gw).
+const EXTERNAL_MAX = 2;
+const CALL_TRUST = process.env.ZENOS_CALL_TRUST || "/etc/zenos/call-servers.json";
+const callTrusted = (url) => { try { const host = new URL(url).hostname.toLowerCase(); const t = JSON.parse(fs.readFileSync(CALL_TRUST, "utf8")).trusted; return Array.isArray(t) && t.map((x) => String(x).toLowerCase()).includes(host); } catch { return false; } };
 const saveCall = () => fs.writeFileSync(CALLCFG, JSON.stringify(callcfg), { mode: 0o600 });
 const callPub = () => ({ selected: callcfg.selected, servers: Object.entries(callcfg.servers).map(([id, v]) => ({ id, name: v.name, url: v.url, maxLevel: v.maxLevel, kind: v.kind })) });
 // what the call server sees instead of names: a per-room pseudonym (members map it back on their own devices)
@@ -247,7 +253,7 @@ http.createServer(async (req, res) => {
         const a = b.add; if (!/^wss:\/\/[a-z0-9.-]+(:\d+)?\/?$/i.test(a.url || "")) return send(res, 400, { error: "The address must start with wss://" });
         if (!a.key || !a.secret) return send(res, 400, { error: "API key and secret are needed." });
         const id = (String(a.name || "server").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "server").slice(0, 30);
-        callcfg.servers[id] = { name: String(a.name || id).slice(0, 60), url: a.url.replace(/\/$/, ""), key: String(a.key).trim(), secret: String(a.secret).trim(), maxLevel: Math.max(1, Math.min(5, Number(a.maxLevel) || 2)), kind: "external" };
+        callcfg.servers[id] = { name: String(a.name || id).slice(0, 60), url: a.url.replace(/\/$/, ""), key: String(a.key).trim(), secret: String(a.secret).trim(), maxLevel: Math.max(1, Math.min(callTrusted(a.url) ? 5 : EXTERNAL_MAX, Number(a.maxLevel) || 2)), kind: "external" };
         callcfg.selected = id; saveCall(); audit("msg-callserver-added", { id, maxLevel: callcfg.servers[id].maxLevel }); return send(res, 200, callPub());
       }
       if (b.remove && b.remove !== "local") { delete callcfg.servers[b.remove]; if (callcfg.selected === b.remove) callcfg.selected = "local"; saveCall(); return send(res, 200, callPub()); }
@@ -268,7 +274,8 @@ http.createServer(async (req, res) => {
         room = "c" + roomFor(ch);
       } else if (peer && bundles[peer]) room = "d" + roomFor([acc, peer].sort().join("|"));
       else return send(res, 400, { error: "Nothing to call." });
-      if (level > (srv.maxLevel || 1)) return send(res, 403, { error: `The call server "${srv.name}" carries calls up to L${srv.maxLevel}. This one is L${level}.` });
+      const cap = srv.kind === "external" && !callTrusted(srv.url) ? Math.min(srv.maxLevel || 1, EXTERNAL_MAX) : (srv.maxLevel || 1);   // servers added before the cap too
+      if (level > cap) return send(res, 403, { error: `The call server "${srv.name}" carries calls up to L${cap}. This one is L${level}.` });
       const { AccessToken } = require("livekit-server-sdk");
       const who = ch ? channels[ch].members : [acc, peer];
       const map = Object.fromEntries(who.map((m) => [pseudo(room, m), m]));

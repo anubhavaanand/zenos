@@ -8,7 +8,7 @@ and runs it. Anything that goes wrong (program missing, timeout, unreadable answ
 The facts are checked here, outside the proof: signatures (Ed25519 with the enrolled officers' keys), digests, the
 clearance file, the roster, the stop state, the clock; for sign-in with the phone, the passkey checks (zwebauthn).
 """
-import json, math, os, subprocess, time
+import json, math, os, select, subprocess, time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PROGRAM = os.environ.get("ZENOS_DECIDE") or next(
@@ -114,6 +114,9 @@ def send(sealed, sig_ok, size, huge_max, plan_ok):
         return False, "no decision: %s" % e
 
 
+ANSWER_WAIT = float(os.environ.get("ZENOS_DECIDE_WAIT", "2"))  # seconds for one egress answer
+
+
 class EgressStream:
     """the network sentinel's counter: one long-running `zenos-decide egress` that keeps the windows. send() answers
     whether the destination is cut now. If the program cannot answer, the destination is cut (fail closed)."""
@@ -136,13 +139,26 @@ class EgressStream:
                     self._start()
                 self.p.stdin.write(line)
                 self.p.stdin.flush()
+                # a program that does not answer in time counts as no answer: the destination is cut and the program
+                # is restarted (GHSA-m2jw-c24v-8vf6: a hung zenos-decide must not block the sentinel)
+                if not select.select([self.p.stdout], [], [], ANSWER_WAIT)[0]:
+                    raise TimeoutError("zenos-decide egress did not answer")
                 ans = self.p.stdout.readline().strip()
                 if ans in ("cut", "ok"):
                     return ans == "cut"
             except (OSError, ValueError):
                 pass
-            self.p = None
+            self._stop()
         return True
+
+    def _stop(self):
+        if self.p is not None:
+            try:
+                self.p.kill()
+                self.p.wait(timeout=2)
+            except Exception:
+                pass
+        self.p = None
 
     def close(self):
         if self.p is not None:

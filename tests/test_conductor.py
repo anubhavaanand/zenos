@@ -203,5 +203,19 @@ def importlib_reload():
     importlib.reload(zorch)
 
 
+class ProviderNames(unittest.TestCase):
+    """GHSA-gfvc-8h75-76j4: the deny list goes by names, so a provider given by address is refused"""
+    def test_addresses_refused_names_checked(self):
+        ok = lambda u, name="x": zorch.provider_ok({"url": u, "name": name})
+        for u in ("https://142.250.190.46/v1", "https://1.2.3.4/v1", "https://[2001:4860:4860::8888]/v1",
+                  "https://2130706433/v1", "https://0x7f.1/v1", "https://127.1/v1", "https://localhost/v1"):
+            self.assertFalse(ok(u), u)
+        self.assertFalse(ok("https://api.googleapis.com/v1"))
+        self.assertFalse(ok("https://API.DeepSeek.com./v1"))
+        self.assertFalse(ok("https://api.example.org/v1", name="Qwen mirror"))
+        self.assertTrue(ok("https://api.anthropic.com/v1"))
+        self.assertTrue(zorch.provider_ok({"kind": "openai", "name": "o"}))
+
+
 if __name__ == "__main__":
     unittest.main()

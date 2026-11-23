@@ -15,7 +15,7 @@ Configuration: ~/.config/zenos/conductor.json (the person's own; nothing is pres
    "terms": ["Sato", "Project Kite"]}      words always masked (names and the like)
 API keys are entered by the person into the key files (mode 0600). ZENOS ships with none.
 """
-import csv, hashlib, io, json, os, re, time, urllib.request
+import csv, hashlib, io, ipaddress, json, os, re, time, urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -125,10 +125,26 @@ def known_cells(path, masker, limit=50000):
 
 # ---------------- providers ----------------
 
+def _ip_literal(host):
+    """True when the host is an address rather than a name: the deny list goes by names, so an address cannot be
+    checked against it (IPv4/IPv6, and the numeric forms some resolvers accept: 2130706433, 0x7f.1, 127.1)"""
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        pass
+    return bool(re.fullmatch(r"(0x[0-9a-f]+|[0-9]+)(\.(0x[0-9a-f]+|[0-9]+))*", host))
+
+
 def provider_ok(p):
+    """a provider is allowed only by a host NAME that is not on the deny list. An address in place of a name is
+    refused, since it could be a denied provider's address (GHSA-gfvc-8h75-76j4)."""
     host = (urlparse(p.get("url") or {"anthropic": "https://api.anthropic.com",
                                        "openai": "https://api.openai.com"}.get(p.get("kind"), "")).hostname or "")
-    return host and not any(d in host for d in DENY_HOSTS) and not any(d in p.get("name", "").lower() for d in ("qwen", "gemini"))
+    host = host.lower().rstrip(".")
+    if not host or _ip_literal(host) or "." not in host:
+        return False
+    return not any(d in host for d in DENY_HOSTS) and not any(d in p.get("name", "").lower() for d in ("qwen", "gemini"))
 
 
 class HTTPProvider:

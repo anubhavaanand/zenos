@@ -1,7 +1,7 @@
 """Where content may go, the ledger check, the pre-send check and the network sentinel's counter, as the services call
 them (system/lib/zdecide.py). The proofs are in formal/ZenosFormal (Flow, Ledger, Egress). Build first:
 cd formal && lake build."""
-import hashlib, json, os, re, sys, tempfile, unittest
+import hashlib, json, os, re, shutil, sys, tempfile, time, unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../system/lib"))
 import zdecide, zledger
 
@@ -95,6 +95,26 @@ class Egress(unittest.TestCase):
             self.assertFalse(e.send("3 c", "c", True, 0, 10 ** 9))         # approved network
         finally:
             e.close()
+
+    def test_hung_program_cuts_and_restarts(self):
+        """GHSA-m2jw-c24v-8vf6: a zenos-decide that never answers must not block the sentinel"""
+        d = tempfile.mkdtemp()
+        hang = os.path.join(d, "hang")
+        with open(hang, "w") as f:
+            f.write("#!/bin/sh\nexec sleep 60\n")
+        os.chmod(hang, 0o755)
+        e = zdecide.EgressStream(3000, 1000)
+        e.args[0] = hang
+        old, zdecide.ANSWER_WAIT = zdecide.ANSWER_WAIT, 0.3
+        try:
+            t = time.monotonic()
+            self.assertTrue(e.send("1 a", "a", False, 0, 1))              # no answer: cut
+            self.assertLess(time.monotonic() - t, 5)
+            self.assertIsNone(e.p)                                        # the hung program was stopped
+        finally:
+            zdecide.ANSWER_WAIT = old
+            e.close()
+            shutil.rmtree(d, ignore_errors=True)
 
     def test_no_program_cuts(self):
         e = zdecide.EgressStream(3000, 1000)
