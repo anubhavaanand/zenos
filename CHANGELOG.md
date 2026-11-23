@@ -2,8 +2,23 @@
 
 ## Unreleased
 
-- Four reports made through private security advisories (8 Nov 2026, by @anubhavaanand) are fixed with tests in the
-  source. Thank you. What each one was is published with the release that carries the fixes.
+## 0.2.2 Developer Preview (published 2026-11-23)
+
+Fixes for four reports made through private security advisories by @anubhavaanand (8 Nov 2026). Thank you.
+
+- [GHSA-gfvc-8h75-76j4](https://github.com/zenos-org/zenos/security/advisories/GHSA-gfvc-8h75-76j4): the conductor's
+  provider deny list could be passed by giving a provider as an IP address. A provider is now allowed only by a host
+  name; addresses (IPv4, IPv6 and numeric forms) and names without a dot are refused. A name that resolves to a denied
+  provider is still not caught: that is next.
+- [GHSA-m2jw-c24v-8vf6](https://github.com/zenos-org/zenos/security/advisories/GHSA-m2jw-c24v-8vf6): a `zenos-decide`
+  that stopped answering blocked the network sentinel's egress decisions. An answer now has 2 seconds; without it the
+  destination is cut and the program restarted.
+- [GHSA-q7qh-2x6r-5pjx](https://github.com/zenos-org/zenos/security/advisories/GHSA-q7qh-2x6r-5pjx): without
+  `zdistrust.js` the messenger ran trusting every CA. It now refuses to start.
+- [GHSA-g59c-684x-c9gw](https://github.com/zenos-org/zenos/security/advisories/GHSA-g59c-684x-c9gw): an external call
+  server could be set to carry calls up to L5 on its own say-so. External servers now carry at most L2, unless the
+  host's root lists the server in `/etc/zenos/call-servers.json`; servers added before are capped too.
+- Java4Shell (CVE-2026-114938) does not concern the image: it contains no Java.
 
 ## 0.2.1 Developer Preview (published 2026-11-23)
 

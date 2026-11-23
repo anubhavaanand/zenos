@@ -61,12 +61,12 @@ ZENOS is a Debian 13 ("trixie") system with a KDE Plasma 6 X11 session. It does 
 **Try the preview image (no build needed)**
 
 Each Developer Preview comes with a ready-made live / installer image on the
-[Releases page](https://github.com/zenos-org/zenos/releases). For 0.2.1:
+[Releases page](https://github.com/zenos-org/zenos/releases). For 0.2.2:
 
 1. The image is larger than GitHub's 2 GB limit for one file, so it comes in two parts. Download
-   `zenos-0.2.1-preview-amd64.iso.part0`, `.part1` and `zenos-0.2.1-preview-amd64.iso.sha256`, join and check:
-   `cat zenos-0.2.1-preview-amd64.iso.part0 zenos-0.2.1-preview-amd64.iso.part1 > zenos-0.2.1-preview-amd64.iso`
-   then `sha256sum -c zenos-0.2.1-preview-amd64.iso.sha256` (on Windows: `copy /b part0 + part1 <name>.iso`, then
+   `zenos-0.2.2-preview-amd64.iso.part0`, `.part1` and `zenos-0.2.2-preview-amd64.iso.sha256`, join and check:
+   `cat zenos-0.2.2-preview-amd64.iso.part0 zenos-0.2.2-preview-amd64.iso.part1 > zenos-0.2.2-preview-amd64.iso`
+   then `sha256sum -c zenos-0.2.2-preview-amd64.iso.sha256` (on Windows: `copy /b part0 + part1 <name>.iso`, then
    `certutil -hashfile <name>.iso SHA256`).
 2. Boot it in a virtual machine (4 GB RAM or more), or write it to a USB stick and boot an ordinary PC (BIOS or
    UEFI). So far it has been tested in QEMU virtual machines, not yet on a wide range of physical PCs.
