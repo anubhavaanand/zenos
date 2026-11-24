@@ -4,14 +4,9 @@
 // Posts are material, never instructions: their text is compared, cut and quoted, never executed or followed.
 
 const THREADS = [
-  { id: "ideas", group: "Share", about: "What should ZENOS do? An AI sorts every post; a maintainer decides." },
-  { id: "problems", group: "Share", about: "Something does not work. Security problems: report privately (SECURITY.md)." },
-  { id: "my-use", group: "Share", about: "How you would use ZENOS, if no edition covers it yet. Many alike can become a fork." },
-  { id: "office", group: "Editions", edition: "office", about: "ZENOS Office: for companies and teams." },
-  { id: "family", group: "Editions", edition: "family", about: "ZENOS Family: for a household, with parents' approvals." },
-  { id: "personal", group: "Editions", edition: "personal", about: "ZENOS Personal: for one person." },
+  { id: "feedback", group: "Share", about: "Ideas, problems, how you would use ZENOS: one place for all of it. Pick an edition if it is about one. An AI sorts every post; a maintainer decides. Security problems: report privately (SECURITY.md)." },
   { id: "github", group: "From the project", view: "github", about: "What happens in the repository: releases, merged changes, pull requests, who offered to take an issue, comments from contributors, issues opened and closed, milestones." },
-  { id: "security-watch", group: "From the project", staff: true, about: "Cyberattacks and vulnerabilities reported in the US and Asia, collected twice a day. Each item links its source; serious ones say how urgent they are and what to do. Anyone signed in can comment." },
+  { id: "security-watch", group: "From the project", staff: true, about: "Cyberattacks and vulnerabilities reported in the US and Asia, collected four times a day. Each item links its source; serious ones say how urgent they are and what to do. Anyone signed in can comment." },
   { id: "release-notes", group: "From the project", staff: true, about: "What changed, and which threads it came from." },
   { id: "accepted", group: "From the project", view: "accepted", about: "Proposals a maintainer accepted, and where they are." },
   { id: "roadmap", group: "From the project", staff: true, about: "What the project plans next." },
@@ -45,7 +40,8 @@ async function githubData(env) {
 }
 
 const TH = Object.fromEntries(THREADS.map((t) => [t.id, t]));
-const EDITIONS = ["office", "family", "personal"];
+const HIDE_EMPTY = ["release-notes", "accepted", "roadmap"];
+const EDITIONS = ["office", "family", "personal", "new"];   // "new": a kind of use no edition covers yet
 const STATUSES = ["proposed", "accepted", "declined", "building", "released", "fork"];
 const OPEN = ["accepted", "building", "released", "fork"];
 const SECURITY_WORDS = /\b(sign[- ]?in|password|vault|key|keys|passkey|guard|ledger|proof|formal|encrypt\w*|seal\w*|clearance|firewall|audit|tpm|login)\b/i;
@@ -56,7 +52,7 @@ const words = (s) => new Set(String(s).toLowerCase().replace(/[^a-z0-9぀-ヿ一
 function jaccard(a, b) { let n = 0; for (const w of a) if (b.has(w)) n++; return n / ((a.size + b.size - n) || 1); }
 const clip = (s, n) => { s = String(s || "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 const firstSentence = (s) => clip(String(s).split(/(?<=[.!?。])\s/)[0], 70);
-const whereOf = (p) => p.edition ? `ZENOS ${p.edition[0].toUpperCase() + p.edition.slice(1)} (edition settings)` : p.thread === "my-use" ? "A kind of use no edition covers yet" : "Core (shared by all editions)";
+const whereOf = (p) => p.edition === "new" || p.thread === "my-use" ? "A kind of use no edition covers yet" : p.edition ? `ZENOS ${p.edition[0].toUpperCase() + p.edition.slice(1)} (edition settings)` : "Core (shared by all editions)";
 const rnd = (n) => { const b = new Uint8Array(n); crypto.getRandomValues(b); return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
 const enc = new TextEncoder();
 function same(a, b) { a = enc.encode(String(a)); b = enc.encode(String(b)); if (a.length !== b.length || !a.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i]; return d === 0; }
@@ -138,7 +134,7 @@ async function triage(env) {
   for (const post of todo) {
     const w = words(post.text); let best = null, score = 0;
     for (const pr of props) {
-      if ((pr.edition || "") !== (post.edition || "") || (pr.thread === "my-use") !== (post.thread === "my-use")) continue;
+      if ((pr.edition || "") !== (post.edition || "")) continue;
       const s = jaccard(w, words(pr.asked + " " + (texts[pr.id] || ""))); if (s > score) { score = s; best = pr; }
     }
     let pr = score >= 0.25 ? best : null;
@@ -154,7 +150,7 @@ async function triage(env) {
     texts[pr.id] = (texts[pr.id] || "") + " " + post.text;
     const n = (await one(env.DB, "SELECT COUNT(*) n FROM proposal_posts WHERE proposal = ?", pr.id)).n;
     if (SECURITY_WORDS.test(post.text) && !pr.security) await run(env.DB, "UPDATE proposals SET security = 1 WHERE id = ?", pr.id);
-    if (pr.thread === "my-use" && n >= 3 && pr.status === "proposed") await run(env.DB, "UPDATE proposals SET route = 'fork' WHERE id = ?", pr.id);
+    if (pr.edition === "new" && n >= 3 && pr.status === "proposed") await run(env.DB, "UPDATE proposals SET route = 'fork' WHERE id = ?", pr.id);
     const note = n > 1 ? `Grouped with ${n - 1} similar post${n > 2 ? "s" : ""} → Proposal #${pr.id}: ${pr.title}` : `${pr.where_} → Proposal #${pr.id}: ${pr.title}`;
     await run(env.DB, "UPDATE posts SET proposal = ?, ai = ? WHERE id = ?", pr.id, note, post.id);
   }
@@ -293,7 +289,9 @@ async function api(req, env, ctx) {
     const acc = (await one(env.DB, `SELECT COUNT(*) n FROM proposals WHERE status IN ('accepted','building','released','fork')`)).n;
     return json(200, { me: me && { handle: me.handle, name: me.name, via: me.via }, admin, signin: env.TEST_SIGNIN === "1" ? "test" : "github",
       threads: THREADS.map((t) => ({ id: t.id, group: t.group, about: t.about, staff: !!t.staff, view: t.view || "",
-        count: t.view === "github" ? ghCount : t.view === "accepted" ? acc : t.edition ? (counts["ed:" + t.edition] || 0) : (counts[t.id] || 0) })) });
+        count: t.view === "github" ? ghCount : t.view === "accepted" ? acc : t.edition ? (counts["ed:" + t.edition] || 0) : (counts[t.id] || 0) }))
+        // the project's own threads appear once they have something in them (maintainers always see them, to post)
+        .filter((t) => admin || !HIDE_EMPTY.includes(t.id) || t.count > 0) });
   }
   if (p === "/api/thread") {
     const t = TH[u.searchParams.get("t")]; if (!t) return json(404, { error: "no such thread" });
