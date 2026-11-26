@@ -5,7 +5,7 @@ Run by .github/workflows/activity.yml with the workflow's own GITHUB_TOKEN (no o
 `activity` branch; the board reads it from raw.githubusercontent.com. (The board cannot ask the GitHub API itself:
 the API's limit for requests without a key is shared by every Cloudflare server on the same address.)
   github_activity.py OUT.json"""
-import json, os, re, sys, time, urllib.request
+import json, os, re, sys, time, urllib.error, urllib.request
 from datetime import datetime
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "zenos-org/zenos")
@@ -22,8 +22,19 @@ def get(path):
     h = {"Accept": "application/vnd.github+json", "User-Agent": "zenos-activity"}
     if TOKEN:
         h["Authorization"] = "Bearer " + TOKEN
-    with urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{REPO}{path}", headers=h), timeout=30) as r:
-        return json.load(r)
+    req = urllib.request.Request(f"https://api.github.com/repos/{REPO}{path}", headers=h)
+    # GitHub's API sometimes answers 502/503/504 for a moment; ask again a few times before failing the run.
+    for wait in (5, 15, 45, None):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or wait is None:
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if wait is None:
+                raise
+        time.sleep(wait)
 
 
 def ms(t):
