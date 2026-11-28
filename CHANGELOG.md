@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.2.3 Developer Preview (published 2026-11-28)
+
+Two Debian security updates published after 0.2.2 was built, now in the image:
+
+- libzstd 1.5.7+dfsg-1+deb13u1 ([DSA-6657-1](https://www.debian.org/security/dsa-6657-1),
+  CVE-2026-124851; [tracker](https://security-tracker.debian.org/tracker/DSA-6657-1)).
+- shadow 1:4.17.4-2+deb13u1 ([DSA-6661-1](https://www.debian.org/security/dsa-6661-1), CVE-2026-135901: local
+  denial of service through file corruption in newuidmap and newgidmap;
+  [tracker](https://security-tracker.debian.org/tracker/DSA-6661-1)).
+- The image build now stops if any of these packages is older than its fixed version, so a stale mirror or cache
+  cannot ship them unnoticed.
+- No change to ZENOS's own programs. flatpak, firefox-esr and thunderbird (DSA-6655-1, DSA-6662-1, DSA-6663-1) are not in
+  the image.
+
 ## 0.2.2 Developer Preview (published 2026-11-23)
 
 Fixes for four reports made through private security advisories by @anubhavaanand (8 Nov 2026). Thank you.

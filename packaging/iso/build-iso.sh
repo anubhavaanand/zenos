@@ -208,6 +208,24 @@ EOF
 chmod +x config/hooks/live/0960-zenos-no-xembed.hook.chroot
 mkdir -p config/includes.chroot/etc/calamares/modules
 printf -- '---\nplymouth_theme: zenos\n' > config/includes.chroot/etc/calamares/modules/plymouthcfg.conf
+# Debian security fixes the image must carry: the build stops if a package is older than its fixed version
+# (live-build takes trixie-security, but a stale mirror or cache must not ship a known hole unnoticed)
+cat > config/hooks/live/0990-zenos-min-versions.hook.chroot <<'EOF'
+#!/bin/sh
+set -e
+# package       fixed version          advisory
+check() {
+  v="$(dpkg-query -W -f='${Version}' "$1" 2>/dev/null)" || return 0
+  [ -n "$v" ] || return 0                                               # not in the image
+  dpkg --compare-versions "$v" ge "$2" || { echo "ZENOS: $1 $v is older than $2 ($3)" >&2; exit 1; }
+}
+check libzstd1    1.5.7+dfsg-1+deb13u1   DSA-6657-1
+check passwd      1:4.17.4-2+deb13u1     DSA-6661-1
+check login.defs  1:4.17.4-2+deb13u1     DSA-6661-1
+check uidmap      1:4.17.4-2+deb13u1     DSA-6661-1
+check libsubid5   1:4.17.4-2+deb13u1     DSA-6661-1
+EOF
+chmod +x config/hooks/live/0990-zenos-min-versions.hook.chroot
 
 lb build 2>&1 | tee build.log
 ls -la "$W"/*.iso
